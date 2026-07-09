@@ -1,84 +1,48 @@
 import os
-import httpx  # <--- Import httpx directly to override transport configurations
-from typing import TypedDict, Annotated, Sequence
-from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
+from openai import OpenAI
 
-class AgentState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], add_messages]
-    doc_id: str
-    work_id: str
-    elem_id: str
-    selected_entity: dict
+def run_cad_agent(prompt: str, doc_id: str, work_id: str, elem_id: str, selected_entity: dict) -> str:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("[CRITICAL ERROR] OPENAI_API_KEY environment variable is MISSING on Render!")
+        return "Backend API configuration error: Key missing."
 
-def call_model(state: AgentState):
-    messages = state['messages']
-    doc_id = state['doc_id']
-    selected_entity = state['selected_entity']
+    print(f"[NATIVE OPENAI] Running prompt: '{prompt}'")
     
-    system_prompt = (
+    # Assemble your engineering context string manually
+    system_instruction = (
         "You are an expert AI CAD co-pilot integrated directly within Onshape. "
-        f"You are currently analyzing Document ID: {doc_id}. "
+        f"The active workspace document context is Document ID: {doc_id or 'N/A'}.\n"
     )
     
     if selected_entity:
-        system_prompt += f"The user has highlighted a 3D geometry {selected_entity.get('entityType')} with ID: {selected_entity.get('id')}."
+        system_instruction += (
+            f"The user has highlighted a specific 3D topology entity right now:\n"
+            f"- Entity Type: {selected_entity.get('entityType')}\n"
+            f"- Element/Entity ID: {selected_entity.get('id')}\n"
+            "Identify this element to the user when asked."
+        )
     else:
-        system_prompt += "No specific 3D geometry is currently selected."
+        system_instruction += "No specific 3D geometry is currently highlighted in the viewport."
 
-    full_messages = [SystemMessage(content=system_prompt)] + list(messages)
-    
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is missing on the server configuration.")
-
-    print(f"[DEBUG] Spawning custom HTTP/1.1 transport client to OpenAI...")
-    
     try:
-        # 💥 THE FIX: Force HTTP/1.1 explicitly and disable HTTP/2 to clear Render proxy blocks
-        custom_http_client = httpx.Client(
-            http1=True,
-            http2=False,
-            follow_redirects=True,
-            timeout=httpx.Timeout(30.0, connect=10.0)
-        )
-
-        llm = ChatOpenAI(
-            model="gpt-4o",
+        # Instantiate your native working client
+        client = OpenAI(api_key=api_key)
+        
+        response = client.chat.completions.create(
+            model="gpt-4o",  # Using full gpt-4o for robust reasoning capabilities
             temperature=0,
-            api_key=api_key,
-            http_client=custom_http_client  # Inject the safe transport engine layer
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt}
+            ]
         )
         
-        response = llm.invoke(full_messages)
-        print("[DEBUG] OpenAI responded successfully via standard HTTP/1.1 channel!")
-        return {"messages": [response]}
-        
-    except Exception as e:
-        print(f"[CRITICAL EXCEPTION inside call_model]: {str(e)}")
-        raise e
+        ai_reply = response.choices[0].message.content
+        print("[NATIVE OPENAI] Success! Response fetched.")
+        return ai_reply
 
-def create_graph():
-    workflow = StateGraph(AgentState)
-    workflow.add_node("agent", call_model)
-    workflow.add_edge(START, "agent")
-    workflow.add_edge("agent", END)
-    return workflow.compile()
-
-def run_cad_agent(prompt: str, doc_id: str, work_id: str, elem_id: str, selected_entity: dict) -> str:
-    try:
-        graph = create_graph()
-        initial_state = {
-            "messages": [HumanMessage(content=prompt)],
-            "doc_id": doc_id or "",
-            "work_id": work_id or "",
-            "elem_id": elem_id or "",
-            "selected_entity": selected_entity or {}
-        }
-        output_state = graph.invoke(initial_state)
-        return output_state["messages"][-1].content
     except Exception as e:
-        print(f"[CRITICAL EXCEPTION inside run_cad_agent execution]: {str(e)}")
-        return f"Backend AI Execution Engine Error: {str(e)}"
+        print(f"[NATIVE OPENAI CRASH]: {str(e)}")
+        return f"Native Backend Connection Error: {str(e)}"
+    
