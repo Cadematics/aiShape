@@ -1,6 +1,11 @@
 import os
 import requests
 from django.http import JsonResponse
+import json
+from django.views.decorators.csrf import csrf_exempt
+
+
+
 
 def onshape_callback(request):
     # 1. Catch the unique authorization code sent by Onshape
@@ -62,3 +67,52 @@ def onshape_callback(request):
                 'redirect_uri_used': actual_redirect_uri
             }
         }, status=response.status_code)
+    
+
+
+@csrf_exempt # Exempt from CSRF tokens since we are handling cross-domain security via CORS
+def api_chat(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST requests allowed'}, status=405)
+    
+    try:
+        # Parse the JSON payload coming from React
+        data = json.loads(request.body)
+        
+        user_prompt = data.get('prompt', '')
+        cad_context = data.get('context', {})
+        selected_entity = data.get('selectedEntity') # Can be None if nothing clicked
+        
+        # Extract individual tokens for your future CAD queries
+        doc_id = cad_context.get('documentId')
+        work_id = cad_context.get('workspaceId')
+        elem_id = cad_context.get('elementId')
+        
+        # 💥 DEBUG PRINT: Watch the telemetry hit your Render logs live!
+        print(f"\n[AI CHAT ENDPOINT INGEST]")
+        print(f"-> Prompt: {user_prompt}")
+        print(f"-> CAD Context: Doc={doc_id[:6]}..., Work={work_id[:6]}..., Elem={elem_id[:6]}...")
+        print(f"-> Clicked Entity Topology: {selected_entity}\n")
+        
+        # TODO: This is where we will invoke the LangGraph Agent Engine:
+        # agent_response = run_cad_agent(user_prompt, doc_id, work_id, elem_id, selected_entity)
+        
+        # Mock Response for testing the front-to-back pipeline connection
+        mock_reply = f"Backend received your request for document {doc_id[:6]}. "
+        if selected_entity:
+            mock_reply += f"I see you targeted a {selected_entity.get('entityType')}."
+        else:
+            mock_reply += "No viewport selections were highlighted."
+            
+        return JsonResponse({
+            'status': 'success',
+            'reply': mock_reply
+        })
+
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON format'}, status=400)
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+
+
