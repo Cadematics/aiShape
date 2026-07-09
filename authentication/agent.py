@@ -73,3 +73,8 @@ def run_cad_agent(prompt: str, doc_id: str, work_id: str, elem_id: str, selected
     except Exception as e:
         print(f"[CRITICAL EXCEPTION inside run_cad_agent execution]: {str(e)}")
         return f"Backend AI Execution Engine Error: {str(e)}"
+    
+
+
+
+    
