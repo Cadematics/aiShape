@@ -1,47 +1,85 @@
 
 
+# api_key="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"
+
 
 
 
 
 
 import os
-from openai import OpenAI
+from typing import TypedDict, Annotated, Sequence
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
 
+class AgentState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    doc_id: str
+    work_id: str
+    elem_id: str
+    selected_entity: dict
 
-def run_cad_agent(prompt: str, doc_id: str, work_id: str, elem_id: str, selected_entity: dict) -> str:
-    api_key = os.environ.get("OPENAI_API_KEY")
+def call_model(state: AgentState):
+    messages = state['messages']
+    doc_id = state['doc_id']
+    selected_entity = state['selected_entity']
     
-    # api_key="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"
+    system_prompt = (
+        "You are an expert AI CAD co-pilot integrated directly within Onshape. "
+        f"You are currently analyzing Document ID: {doc_id}. "
+    )
+    
+    if selected_entity:
+        system_prompt += f"The user has highlighted a 3D geometry {selected_entity.get('entityType')} with ID: {selected_entity.get('id')}."
+    else:
+        system_prompt += "No specific 3D geometry is currently selected."
+
+    full_messages = [SystemMessage(content=system_prompt)] + list(messages)
+    
+    # 💥 CRITICAL CHECK: Verify API key existence explicitly before calling OpenAI
+    # api_key = os.environ.get("OPENAI_API_KEY")
+    api_key="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"
     if not api_key:
         print("[CRITICAL ERROR] OPENAI_API_KEY environment variable is MISSING on Render!")
-        return "Backend API configuration error: Key missing."
+        raise ValueError("OPENAI_API_KEY environment variable is missing on the server configuration.")
 
-    print(f"[NATIVE JOKE TEST] Key validation check passed. Prompt received: '{prompt}'")
-
+    print(f"[DEBUG] Attempting live hand-off to OpenAI GPT-4o with key length: {len(api_key)}")
+    
     try:
-        # Build an explicit, isolated connection layer with generous timeout limits
-        # to ensure Gunicorn doesn't drop the thread socket prematurely
-        client = OpenAI(
-            api_key=api_key,
-            timeout=60.0  # Force a long timeout cushion
+        llm = ChatOpenAI(
+            model="gpt-4o",
+            temperature=0,
+            api_key=api_key
         )
-        
-        print("[NATIVE JOKE TEST] Deserializing connection pool. Reaching out to OpenAI...")
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini", # Using mini for the fastest possible round-trip execution
-            temperature=0.7,
-            messages=[
-                {"role": "system", "content": "You are a funny assistant. Tell a short engineering or coding joke based on the user request."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
-        ai_reply = response.choices[0].message.content
-        print("[NATIVE JOKE TEST] Success! Joke response returned.")
-        return ai_reply
-
+        response = llm.invoke(full_messages)
+        print("[DEBUG] OpenAI responded successfully!")
+        return {"messages": [response]}
     except Exception as e:
-        print(f"[NATIVE JOKE TEST CRASH]: {str(e)}")
-        return f"Isolated Joke API Connection Failure: {str(e)}"
+        print(f"[CRITICAL EXCEPTION inside call_model]: {str(e)}")
+        raise e
+
+def create_graph():
+    workflow = StateGraph(AgentState)
+    workflow.add_node("agent", call_model)
+    workflow.add_edge(START, "agent")
+    workflow.add_edge("agent", END)
+    return workflow.compile()
+
+def run_cad_agent(prompt: str, doc_id: str, work_id: str, elem_id: str, selected_entity: dict) -> str:
+    # Safe try-catch wrapper for graph execution
+    try:
+        graph = create_graph()
+        initial_state = {
+            "messages": [HumanMessage(content=prompt)],
+            "doc_id": doc_id or "",
+            "work_id": work_id or "",
+            "elem_id": elem_id or "",
+            "selected_entity": selected_entity or {}
+        }
+        output_state = graph.invoke(initial_state)
+        return output_state["messages"][-1].content
+    except Exception as e:
+        print(f"[CRITICAL EXCEPTION inside run_cad_agent execution]: {str(e)}")
+        return f"Backend AI Execution Engine Error: {str(e)}"
