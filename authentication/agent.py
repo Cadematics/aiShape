@@ -1,4 +1,5 @@
 import os
+import httpx  # <--- Import httpx directly to override transport configurations
 from typing import TypedDict, Annotated, Sequence
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
@@ -29,23 +30,32 @@ def call_model(state: AgentState):
 
     full_messages = [SystemMessage(content=system_prompt)] + list(messages)
     
-    # 💥 CRITICAL CHECK: Verify API key existence explicitly before calling OpenAI
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        print("[CRITICAL ERROR] OPENAI_API_KEY environment variable is MISSING on Render!")
         raise ValueError("OPENAI_API_KEY environment variable is missing on the server configuration.")
 
-    print(f"[DEBUG] Attempting live hand-off to OpenAI GPT-4o with key length: {len(api_key)}")
+    print(f"[DEBUG] Spawning custom HTTP/1.1 transport client to OpenAI...")
     
     try:
+        # 💥 THE FIX: Force HTTP/1.1 explicitly and disable HTTP/2 to clear Render proxy blocks
+        custom_http_client = httpx.Client(
+            http1=True,
+            http2=False,
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0, connect=10.0)
+        )
+
         llm = ChatOpenAI(
             model="gpt-4o",
             temperature=0,
-            api_key=api_key
+            api_key=api_key,
+            http_client=custom_http_client  # Inject the safe transport engine layer
         )
+        
         response = llm.invoke(full_messages)
-        print("[DEBUG] OpenAI responded successfully!")
+        print("[DEBUG] OpenAI responded successfully via standard HTTP/1.1 channel!")
         return {"messages": [response]}
+        
     except Exception as e:
         print(f"[CRITICAL EXCEPTION inside call_model]: {str(e)}")
         raise e
@@ -58,7 +68,6 @@ def create_graph():
     return workflow.compile()
 
 def run_cad_agent(prompt: str, doc_id: str, work_id: str, elem_id: str, selected_entity: dict) -> str:
-    # Safe try-catch wrapper for graph execution
     try:
         graph = create_graph()
         initial_state = {
@@ -73,8 +82,3 @@ def run_cad_agent(prompt: str, doc_id: str, work_id: str, elem_id: str, selected
     except Exception as e:
         print(f"[CRITICAL EXCEPTION inside run_cad_agent execution]: {str(e)}")
         return f"Backend AI Execution Engine Error: {str(e)}"
-    
-
-
-
-    
