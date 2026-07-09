@@ -1,48 +1,47 @@
+
+
+
+
+
+
+
 import os
 from openai import OpenAI
 
+
 def run_cad_agent(prompt: str, doc_id: str, work_id: str, elem_id: str, selected_entity: dict) -> str:
-    api_key = os.environ.get("OPENAI_API_KEY")
+    # api_key = os.environ.get("OPENAI_API_KEY")
+    
+    api_key="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"
     if not api_key:
         print("[CRITICAL ERROR] OPENAI_API_KEY environment variable is MISSING on Render!")
         return "Backend API configuration error: Key missing."
 
-    print(f"[NATIVE OPENAI] Running prompt: '{prompt}'")
-    
-    # Assemble your engineering context string manually
-    system_instruction = (
-        "You are an expert AI CAD co-pilot integrated directly within Onshape. "
-        f"The active workspace document context is Document ID: {doc_id or 'N/A'}.\n"
-    )
-    
-    if selected_entity:
-        system_instruction += (
-            f"The user has highlighted a specific 3D topology entity right now:\n"
-            f"- Entity Type: {selected_entity.get('entityType')}\n"
-            f"- Element/Entity ID: {selected_entity.get('id')}\n"
-            "Identify this element to the user when asked."
-        )
-    else:
-        system_instruction += "No specific 3D geometry is currently highlighted in the viewport."
+    print(f"[NATIVE JOKE TEST] Key validation check passed. Prompt received: '{prompt}'")
 
     try:
-        # Instantiate your native working client
-        client = OpenAI(api_key=api_key)
+        # Build an explicit, isolated connection layer with generous timeout limits
+        # to ensure Gunicorn doesn't drop the thread socket prematurely
+        client = OpenAI(
+            api_key=api_key,
+            timeout=60.0  # Force a long timeout cushion
+        )
+        
+        print("[NATIVE JOKE TEST] Deserializing connection pool. Reaching out to OpenAI...")
         
         response = client.chat.completions.create(
-            model="gpt-4o",  # Using full gpt-4o for robust reasoning capabilities
-            temperature=0,
+            model="gpt-4o-mini", # Using mini for the fastest possible round-trip execution
+            temperature=0.7,
             messages=[
-                {"role": "system", "content": system_instruction},
+                {"role": "system", "content": "You are a funny assistant. Tell a short engineering or coding joke based on the user request."},
                 {"role": "user", "content": prompt}
             ]
         )
         
         ai_reply = response.choices[0].message.content
-        print("[NATIVE OPENAI] Success! Response fetched.")
+        print("[NATIVE JOKE TEST] Success! Joke response returned.")
         return ai_reply
 
     except Exception as e:
-        print(f"[NATIVE OPENAI CRASH]: {str(e)}")
-        return f"Native Backend Connection Error: {str(e)}"
-    
+        print(f"[NATIVE JOKE TEST CRASH]: {str(e)}")
+        return f"Isolated Joke API Connection Failure: {str(e)}"
