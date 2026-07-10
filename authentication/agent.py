@@ -82,18 +82,24 @@ def evaluate_featurescript(doc_id: str, work_id: str, elem_id: str, script_sourc
 # =====================================================================
 def core_agent_node(state: AgentState):
     llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=OPENAI_HARDCODED_KEY)
-    
-    # Bind the highly flexible generic tools
     llm_with_tools = llm.bind_tools([onshape_api_call, evaluate_featurescript])
+    
+    # Extract live context from the current session state
+    doc_id = state.get('doc_id')
+    work_id = state.get('work_id')
+    elem_id = state.get('elem_id')
     
     system_msg = SystemMessage(
         "You are an elite autonomous Onshape CAD agent modeled after a production MCP architecture.\n"
-        "Instead of relying on rigid, pre-built functions, you manipulate geometry by making direct, structured REST API payloads.\n\n"
+        "You manipulate geometry by making direct, structured REST API payloads.\n\n"
+        "--- CURRENT LIVE CONTEXT TOKEN VALUES ---\n"
+        f"Use these exact values if you need to build paths or body payloads manually:\n"
+        f"- Document ID: {doc_id}\n"
+        f"- Workspace ID: {work_id}\n"
+        f"- Element ID: {elem_id}\n\n"
         "--- CAD STRATEGY GUIDELINES ---\n"
-        "1. To create a new Document, use 'onshape_api_call' with POST to '/documents'.\n"
-        "2. To add a feature (sketch, extrude, etc.), POST to '/v9/partstudios/d/DOC_ID/w/WORK_ID/e/ELEM_ID/features'.\n"
-        "3. When you need to chain an extrusion to a newly created sketch, check for transit IDs or evaluate queries using 'evaluate_featurescript'.\n"
-        f"Active Document Scope Context: Doc ID: {state.get('doc_id') or 'Pending New Creation'}\n"
+        "1. To add a feature (sketch, extrude, etc.), POST to '/v9/partstudios/d/DOC_ID/w/WORK_ID/e/ELEM_ID/features'.\n"
+        "2. Keep placeholder tokens like DOC_ID, WORK_ID, and ELEM_ID literally in your tool path string; the background wrapper will auto-inject them."
     )
     
     response = llm_with_tools.invoke([system_msg] + list(state['messages']))
@@ -102,14 +108,20 @@ def core_agent_node(state: AgentState):
         tool_call = response.tool_calls[0]
         args = tool_call['args']
         
+        # 💥 THE FIX: Intercept the tool call paths and force real variables into the path strings
         if tool_call['name'] == 'onshape_api_call':
+            path_str = args.get('path', '')
+            # Automatically replace any uppercase placeholders with the real active values
+            path_str = path_str.replace('DOC_ID', doc_id).replace('WORK_ID', work_id).replace('ELEM_ID', elem_id)
+            args['path'] = path_str
+            
             output = onshape_api_call.invoke(args)
             return {"messages": [HumanMessage(content=output)]}
+            
         elif tool_call['name'] == 'evaluate_featurescript':
-            # Ensure runtime context maps are injected
-            args['doc_id'] = args.get('doc_id') or state['doc_id']
-            args['work_id'] = args.get('work_id') or state['work_id']
-            args['elem_id'] = args.get('elem_id') or state['elem_id']
+            args['doc_id'] = doc_id
+            args['work_id'] = work_id
+            args['elem_id'] = elem_id
             output = evaluate_featurescript.invoke(args)
             return {"messages": [HumanMessage(content=output)]}
             
