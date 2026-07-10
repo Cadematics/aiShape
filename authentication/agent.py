@@ -106,6 +106,9 @@ def create_extrude_tool(depth_mm: float, state: dict) -> str:
     work_id = state.get('work_id')
     elem_id = state.get('elem_id')
     
+    print(f'inside create_extrude_tool: doc_id={doc_id}, work_id={work_id}, elem_id={elem_id}, depth_mm={depth_mm}')
+
+
     access_key = os.environ.get("ONSHAPE_ACCESS_KEY")
     secret_key = os.environ.get("ONSHAPE_SECRET_KEY")
     
