@@ -75,8 +75,10 @@ def evaluate_featurescript(doc_id: str, work_id: str, elem_id: str, script_sourc
     Evaluates a FeatureScript expression in the context of a given Part Studio.
     Use this to look up transient IDs, evaluate queries, or locate faces and sketch regions.
     """
+    
         
-    url = f"https://cad.onshape.com/api/v15/partstudios/d/{doc_id}/w/{work_id}/e/{elem_id}/featurescript"
+    # Standardized endpoint path (using the root /api/ path structure)
+    url = f"https://cad.onshape.com/api/partstudios/d/{doc_id}/w/{work_id}/e/{elem_id}/featurescript"
     
     payload = {
         "script": script_source,
@@ -85,7 +87,13 @@ def evaluate_featurescript(doc_id: str, work_id: str, elem_id: str, script_sourc
     
     try:
         response = requests.post(url, json=payload, auth=HTTPBasicAuth(access_key, secret_key))
-        return f"FeatureScript Output:\n{json.dumps(response.json(), indent=2)}"
+        
+        # 💥 THE FIX: Safely parse text error fallback routes
+        try:
+            return f"FeatureScript Output:\n{json.dumps(response.json(), indent=2)}"
+        except ValueError:
+            return f"FeatureScript Status {response.status_code} (Non-JSON Response). Raw Body:\n{response.text}"
+            
     except Exception as e:
         return f"FeatureScript Execution Failure: {str(e)}"
 
