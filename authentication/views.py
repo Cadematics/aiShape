@@ -1,10 +1,15 @@
+access_key ="on_bYfDyZ0QtxjnQOAqlSPTD"
+secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
+openai_api_key="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"
+
+
 import os
 import requests
-from django.http import JsonResponse
 import json
+from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from .agent import run_cad_agent  # <--- Import our new LangGraph runner
-
+from langchain_core.messages import HumanMessage
+from .agent import create_graph  # Clean import without old references
 
 
 def onshape_callback(request):
@@ -76,6 +81,10 @@ from django.views.decorators.csrf import csrf_exempt
 from langchain_core.messages import HumanMessage
 from .agent import create_graph  # <--- Import the graph factory cleanly
 
+
+
+
+
 @csrf_exempt
 def api_chat(request):
     if request.method != 'POST':
@@ -93,7 +102,7 @@ def api_chat(request):
         
         print(f"[LANGGRAPH INGEST] Processing sync traces for prompt: {user_prompt}")
         
-        # Instantiate your multi-agent architecture
+        # Instantiate your agent graph network
         graph = create_graph()
         initial_state = {
             "messages": [HumanMessage(content=user_prompt)],
@@ -101,35 +110,35 @@ def api_chat(request):
             "work_id": work_id or "",
             "elem_id": elem_id or "",
             "selected_entity": selected_entity or {},
-            "steps": [],
-            "current_step_index": 0,
-            "current_errors": "",
-            "available_tools": ["get_part_studio_features_tool"],
-            "generated_code": "",
-            "loop_count": 0
+            "active_payloads": []
         }
         
         execution_progress_logs = []
-        final_answer_text = "The agent network processed your modeling instructions."
+        final_answer_text = ""
         
-        # Safely capture the node execution progression
+        # Safely stream node steps without pulling the whole dictionary object into pprint logs
         for event in graph.stream(initial_state, stream_mode="updates"):
             for node_name, state_update in event.items():
-                node_content = ""
+                
+                # Check for output responses from tools or agent reasoning steps
                 if "messages" in state_update and state_update["messages"]:
-                    node_content = state_update["messages"][-1].content
+                    latest_msg = state_update["messages"][-1]
+                    # Handle both standard BaseMessage objects and raw string values safely
+                    node_content = latest_msg.content if hasattr(latest_msg, 'content') else str(latest_msg)
+                    if node_content:
+                        final_answer_text = node_content
                 
-                # Human-readable progress tags mimicking your CLI logs
+                # Format step markers that drop beautifully inside the markdown chat layout
                 log_title = node_name.replace('_', ' ').title()
-                log_entry = f"⦾ [{log_title}] -> Action completed."
-                execution_progress_logs.append(log_entry)
-                
-                if node_content:
-                    final_answer_text = node_content
+                execution_progress_logs.append(f"✓ **{log_title}** successfully processed.")
 
-        # Build your dynamic communication summary layout
-        progress_header = "### 🚀 Agent Execution Pipeline Trace\n" + "\n".join([f"* {log}" for log in execution_progress_logs])
-        combined_markdown_reply = f"{progress_header}\n\n---\n\n### 📦 Final Response\n{final_answer_text}"
+        # If the tool-calls returned data without changing the assistant message, handle fallback text
+        if not final_answer_text:
+            final_answer_text = "CAD processing sequence completed successfully."
+
+        # Compile progress overview with markdown spacing rules
+        progress_block = "### 🚀 Agent Execution Progress\n" + "\n".join([f"* {log}" for log in execution_progress_logs])
+        combined_markdown_reply = f"{progress_block}\n\n---\n\n### 📦 Final Response\n{final_answer_text}"
 
         return JsonResponse({
             'status': 'success',
