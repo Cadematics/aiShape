@@ -116,26 +116,22 @@ def core_agent_node(state: AgentState):
         f"- Document ID: {doc_id}\n"
         f"- Workspace ID: {work_id}\n"
         f"- Element ID: {elem_id}\n\n"
-        "--- PROTOCOL PAYLOAD MANDATE (CRITICAL) ---\n"
-        "The 'parameters' field inside a feature MUST ALWAYS be a JSON Array '[]', never an object '{}'.\n\n"
-        "Example Reference Payload for adding a Feature:\n"
-        "{\n"
-        "  \"feature\": {\n"
-        "    \"btType\": \"BTMFeature-134\",\n"
-        "    \"featureType\": \"extrude\",\n"
-        "    \"name\": \"AI Extrude\",\n"
-        "    \"parameters\": [\n"
-        "      {\n"
-        "        \"btType\": \"BTMParameterEnum-105\",\n"
-        "        \"parameterId\": \"operationType\",\n"
-        "        \"value\": \"NEW\"\n"
-        "      }\n"
-        "    ]\n"
-        "  }\n"
-        "}\n\n"
+        "--- FEATURESCRIPT BOUNDARY RULES ---\n"
+        "When calling 'evaluate_featurescript', DO NOT write top-level declarations like 'annotation', 'export', or custom features.\n"
+        "Instead, write a clean, anonymous functional execution block wrapped in an executable wrapper function structure like this example:\n"
+        "```featurescript\n"
+        "function(context, queries) {\n"
+        "    // Query code to look up geometric attributes safely\n"
+        "    return evaluateQuery(context, qCreatedBy(makeId(\"Top\"), EntityType.FACE));\n"
+        "}\n"
+        "```\n\n"
+        "--- PROTOCOL PAYLOAD MANDATE ---\n"
+        "The 'parameters' field inside an engineering feature payload MUST ALWAYS be a JSON Array '[]', never an object '{}'.\n"
         "Keep placeholder tokens like DOC_ID, WORK_ID, and ELEM_ID literally in your tool path string."
     )
-    
+
+
+
     response = llm_with_tools.invoke([system_msg] + list(state['messages']))
     
     if response.tool_calls:
