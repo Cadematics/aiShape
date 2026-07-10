@@ -125,7 +125,8 @@ def create_graph():
     workflow.add_edge("agent", END)
     return workflow.compile()
 
-def run_cad_agent(prompt: str, doc_id: str, work_id: str, elem_id: str, selected_entity: dict) -> str:
+def run_cad_agent_stream(prompt: str, doc_id: str, work_id: str, elem_id: str, selected_entity: dict):
+    """Compiles the graph and yields state updates and agent thoughts dynamically."""
     try:
         graph = create_graph()
         initial_state = {
@@ -136,7 +137,14 @@ def run_cad_agent(prompt: str, doc_id: str, work_id: str, elem_id: str, selected
             "selected_entity": selected_entity or {},
             "active_payloads": []
         }
-        output_state = graph.invoke(initial_state)
-        return output_state["messages"][-1].content
+        
+        # Using stream() to capture individual node operations and LLM tokens
+        for event in graph.stream(initial_state, stream_mode="updates"):
+            for node_name, state_update in event.items():
+                # Yield a structured event log for the view controller to stream
+                yield {
+                    "node": node_name,
+                    "update": {k: (v if k != "messages" else v[-1].content) for k, v in state_update.items() if v}
+                }
     except Exception as e:
-        return f"Agent Error: {str(e)}"
+        yield {"error": str(e)}

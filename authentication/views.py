@@ -70,6 +70,11 @@ def onshape_callback(request):
     
 
 
+import json
+from django.http import StreamingHttpResponse, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from .agent import run_cad_agent_stream  # <-- Import the new streaming generator
+
 @csrf_exempt
 def api_chat(request):
     if request.method != 'POST':
@@ -85,24 +90,33 @@ def api_chat(request):
         work_id = cad_context.get('workspaceId')
         elem_id = cad_context.get('elementId')
         
-        print(f"[LANGGRAPH INGEST] Prompt: {user_prompt}")
+        print(f"[LANGGRAPH INGEST] Streaming Prompt: {user_prompt}")
         
-        # 🧠 Fire up the LangGraph State Machine Loop!
-        ai_reply = run_cad_agent(
-            prompt=user_prompt,
-            doc_id=doc_id,
-            work_id=work_id,
-            elem_id=elem_id,
-            selected_entity=selected_entity
-        )
-        
-        return JsonResponse({
-            'status': 'success',
-            'reply': ai_reply
-        })
+        def event_stream_generator():
+            # Fire up the streaming agent generator loop
+            stream = run_cad_agent_stream(
+                prompt=user_prompt,
+                doc_id=doc_id,
+                work_id=work_id,
+                elem_id=elem_id,
+                selected_entity=selected_entity
+            )
+            
+            for chunk in stream:
+                if "error" in chunk:
+                    yield f"data: {json.dumps({'status': 'error', 'message': chunk['error']})}\n\n"
+                    break
+                
+                # Format each agent step as a distinct Server-Sent Event text payload
+                yield f"data: {json.dumps({'status': 'progress', 'node': chunk['node'], 'data': chunk['update']})}\n\n"
+
+        # Return a persistent stream connection with proper event-stream headers
+        response = StreamingHttpResponse(event_stream_generator(), content_type='text/event-stream')
+        response['Cache-Control'] = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'  # Prevents Nginx/Render proxies from buffering the stream chunks
+        return response
 
     except Exception as e:
         print(f"[ERROR IN API CHAT]: {str(e)}")
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-
 
