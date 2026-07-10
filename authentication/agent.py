@@ -28,14 +28,13 @@ class AgentState(TypedDict):
 # =====================================================================
 # 🛠️ TOOL 1: GENERIC ONSHAPE API EXECUTOR (Matches onshape_api_call)
 # =====================================================================
+
 @tool
 def onshape_api_call(method: str, path: str, body: dict) -> str:
     """
     Executes a generic HTTP request directly against the Onshape REST API.
     Use this to create documents, elements, sketches, or features by providing the exact API path and body.
     """
-
-    
     url = f"https://cad.onshape.com/api{path}"
     headers = {
         "Accept": "application/json;charset=UTF-8",
@@ -50,9 +49,22 @@ def onshape_api_call(method: str, path: str, body: dict) -> str:
             headers=headers,
             auth=HTTPBasicAuth(access_key, secret_key)
         )
-        return f"Status {response.status_code} Response:\n{json.dumps(response.json(), indent=2)}"
+        
+        # 💥 THE FIX: Check if the response is valid JSON before parsing it
+        try:
+            response_json = response.json()
+            return f"Status {response.status_code} Response:\n{json.dumps(response_json, indent=2)}"
+        except ValueError:
+            # If it's not JSON, return the raw text payload string directly so the LLM (and you) can debug it!
+            return f"Status {response.status_code} (Non-JSON Response). Raw Body:\n{response.text}"
+            
     except Exception as e:
         return f"HTTP Request Failure: {str(e)}"
+
+
+
+
+
 
 # =====================================================================
 # 🛠️ TOOL 2: FEATURESCRIPT EVALUATOR (Matches evalFeatureScript)
