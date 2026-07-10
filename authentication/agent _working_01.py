@@ -67,8 +67,7 @@ def get_part_studio_features(state: dict) -> str:
     work_id = state.get('work_id')
     elem_id = state.get('elem_id')  # Active Part Studio ID
     
-    access_key = os.environ.get("ONSHAPE_ACCESS_KEY")
-    secret_key = os.environ.get("ONSHAPE_SECRET_KEY")
+    
     
     if not access_key or not secret_key:
         return "Error: Onshape API credentials missing."
@@ -108,8 +107,7 @@ def create_sketch_circle_tool(plane_name_or_id: str, radius_mm: float, state: di
     work_id = state.get('work_id')
     elem_id = state.get('elem_id')
     
-    access_key = os.environ.get("ONSHAPE_ACCESS_KEY")
-    secret_key = os.environ.get("ONSHAPE_SECRET_KEY")
+    
     
     radius_m = radius_mm / 1000.0
     url = f"https://cad.onshape.com/api/v9/partstudios/d/{doc_id}/w/{work_id}/e/{elem_id}/features"
