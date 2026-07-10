@@ -14,6 +14,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
 from langchain_core.tools import tool
+import json
 
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
