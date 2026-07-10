@@ -35,6 +35,8 @@ def create_sketch_circle_tool(plane_id: str, radius_mm: float, state: dict) -> s
     work_id = state.get('work_id')
     elem_id = state.get('elem_id')
     
+    print(f'inside create_sketch_circle_tool: doc_id={doc_id}, work_id={work_id}, elem_id={elem_id}, plane_id={plane_id}, radius_mm={radius_mm}')
+
     access_key ="on_bYfDyZ0QtxjnQOAqlSPTD"
     secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
     
