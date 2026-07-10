@@ -75,15 +75,26 @@ def onshape_callback(request):
     
 
 
+import os
 import json
-from django.http import JsonResponse
+from datetime import datetime
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from langchain_core.messages import HumanMessage
-from .agent import create_graph  # <--- Import the graph factory cleanly
+from .agent import create_graph
 
+LOG_FILE_PATH = os.path.join(os.path.dirname(__file__), 'agent_chat.log')
 
-
-
+def log_agent_interaction(title, data):
+    """Utility function to append raw execution frames cleanly into the log file."""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with open(LOG_FILE_PATH, 'a', encoding='utf-8') as f:
+        f.write(f"\n==================== [{timestamp}] {title} ====================\n")
+        if isinstance(data, (dict, list)):
+            f.write(json.dumps(data, indent=2))
+        else:
+            f.write(str(data))
+        f.write("\n")
 
 @csrf_exempt
 def api_chat(request):
@@ -100,9 +111,15 @@ def api_chat(request):
         work_id = cad_context.get('workspaceId')
         elem_id = cad_context.get('elementId')
         
-        print(f"[LANGGRAPH INGEST] Processing sync traces for prompt: {user_prompt}")
+        # 🪵 LOG: Inbound Frontend Packet Context
+        log_agent_interaction("INBOUND USER PROMPT & STATE CONTEXT", {
+            "prompt": user_prompt,
+            "documentId": doc_id,
+            "workspaceId": work_id,
+            "elementId": elem_id,
+            "selectedEntity": selected_entity
+        })
         
-        # Instantiate your agent graph network
         graph = create_graph()
         initial_state = {
             "messages": [HumanMessage(content=user_prompt)],
@@ -116,27 +133,23 @@ def api_chat(request):
         execution_progress_logs = []
         final_answer_text = ""
         
-        # Safely stream node steps without pulling the whole dictionary object into pprint logs
         for event in graph.stream(initial_state, stream_mode="updates"):
             for node_name, state_update in event.items():
+                # 🪵 LOG: Complete capture of what the LLM decided to do at this exact step
+                log_agent_interaction(f"GRAPH NODE STATE UPDATE: {node_name.upper()}", state_update)
                 
-                # Check for output responses from tools or agent reasoning steps
                 if "messages" in state_update and state_update["messages"]:
                     latest_msg = state_update["messages"][-1]
-                    # Handle both standard BaseMessage objects and raw string values safely
                     node_content = latest_msg.content if hasattr(latest_msg, 'content') else str(latest_msg)
                     if node_content:
                         final_answer_text = node_content
                 
-                # Format step markers that drop beautifully inside the markdown chat layout
                 log_title = node_name.replace('_', ' ').title()
                 execution_progress_logs.append(f"✓ **{log_title}** successfully processed.")
 
-        # If the tool-calls returned data without changing the assistant message, handle fallback text
         if not final_answer_text:
             final_answer_text = "CAD processing sequence completed successfully."
 
-        # Compile progress overview with markdown spacing rules
         progress_block = "### 🚀 Agent Execution Progress\n" + "\n".join([f"* {log}" for log in execution_progress_logs])
         combined_markdown_reply = f"{progress_block}\n\n---\n\n### 📦 Final Response\n{final_answer_text}"
 
@@ -146,5 +159,51 @@ def api_chat(request):
         })
 
     except Exception as e:
-        print(f"[ERROR IN API CHAT]: {str(e)}")
+        log_agent_interaction("CRITICAL API CHAT RUNTIME EXCEPTION", str(e))
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+    
+
+
+
+def view_agent_logs(request):
+    """Renders the raw text file logs cleanly in the browser viewport."""
+    if not os.path.exists(LOG_FILE_PATH):
+        return HttpResponse("<html>bg-slate-900<body><h3>Log file is currently empty or hasn't been created yet.</h3></body></html>")
+    
+    with open(LOG_FILE_PATH, 'r', encoding='utf-8') as f:
+        log_content = f.read()
+        
+    # Quick functional HTML wrapper to make the terminal logs readable
+    html_layout = f"""
+    <html>
+    <head>
+        <title>aiShape Agent Audit Dashboard</title>
+        <style>
+            body {{ background-color: #1e1e1e; color: #d4d4d4; font-family: monospace; padding: 20px; }}
+            .controls {{ margin-bottom: 20px; padding: 10px; background: #2d2d2d; border-radius: 4px; }}
+            a {{ color: #007acc; text-decoration: none; font-weight: bold; margin-right: 20px; }}
+            pre {{ background: #252526; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; }}
+        </style>
+    </head>
+    <body>
+        <div class="controls">
+            <span>🛠️ Operations:</span>
+            <a href="/api/logs/clear/" onclick="return confirm('Are you sure you want to clear all logs?');" style="color: #f44336; margin-left: 15px;">⚠️ Delete Logs & Start Fresh</a>
+        </div>
+        <h3>📄 Active Agent Audit Stream (agent_chat.log)</h3>
+        <pre>{log_content}</pre>
+    </body>
+    </html>
+    """
+    return HttpResponse(html_layout)
+
+@csrf_exempt
+def clear_agent_logs(request):
+    """Truncates the log file back to 0 bytes to start completely fresh."""
+    try:
+        with open(LOG_FILE_PATH, 'w', encoding='utf-8') as f:
+            f.write("") # Overwrite clean empty string
+        log_agent_interaction("SYSTEM ENGINE INITIALIZED", "Log file cleared manually. Fresh environment tracking ready.")
+        return HttpResponse("<html><body><script>alert('Logs cleared successfully!'); window.location.href='/api/logs/';</script></body></html>")
+    except Exception as e:
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)
