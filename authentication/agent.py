@@ -23,11 +23,11 @@ def create_sketch_circle_tool(plane_id: str, radius_mm: float, state: dict) -> s
     work_id = state.get('work_id')
     elem_id = state.get('elem_id')
     
-    access_key = os.environ.get("ONSHAPE_ACCESS_KEY")
-    secret_key = os.environ.get("ONSHAPE_SECRET_KEY")
+    # access_key = os.environ.get("ONSHAPE_ACCESS_KEY")
+    # secret_key = os.environ.get("ONSHAPE_SECRET_KEY")
     
-    access_key = "on_bYfDyZ0QtxjnQOAqlSPTD",
-    secret_key= "aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
+    access_key ="on_bYfDyZ0QtxjnQOAqlSPTD"
+    secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
 
     
     if not access_key or not secret_key:
