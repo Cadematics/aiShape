@@ -15,7 +15,15 @@ class AgentState(TypedDict):
     elem_id: str
     selected_entity: dict
 
+
+
+# access_key ="on_bYfDyZ0QtxjnQOAqlSPTD"
+# secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
+
+
 # 🌟 1. NATIVE PRODUCTION TOOL: Create Sketch Entity
+
+
 @tool
 def create_sketch_circle_tool(plane_id: str, radius_mm: float, state: dict) -> str:
     """Use this tool when the user explicitly requests to create a sketch of a circle."""
@@ -25,21 +33,17 @@ def create_sketch_circle_tool(plane_id: str, radius_mm: float, state: dict) -> s
     
     # access_key = os.environ.get("ONSHAPE_ACCESS_KEY")
     # secret_key = os.environ.get("ONSHAPE_SECRET_KEY")
-    
     access_key ="on_bYfDyZ0QtxjnQOAqlSPTD"
     secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
-
-    
     if not access_key or not secret_key:
         return "Error: Onshape credentials are missing from the Render environment parameters."
 
-    # Standard Onshape API uses meters internally
+    # Convert mm to meters for the native API call
     radius_m = radius_mm / 1000.0
 
-    # Production URL targeting the Part Studio Feature Tree List
     url = f"https://cad.onshape.com/api/v9/partstudios/d/{doc_id}/w/{work_id}/e/{elem_id}/features"
     
-    # Official BTM (Boundary Representation Tree Model) Schema for a generic circle sketch
+    # 💥 THE FIX: Updated internal btType maps to align with standard Onshape serialization
     payload = {
         "feature": {
             "btType": "BTMSketch-151",
@@ -63,7 +67,7 @@ def create_sketch_circle_tool(plane_id: str, radius_mm: float, state: dict) -> s
                     "centerId": "center",
                     "type": "circle",
                     "geometry": {
-                        "btType": "BTCircle-23",
+                        "btType": "BTCircle-115",  # <--- FIXED: Swapped from BTCircle-23 to BTCircle-115
                         "radius": radius_m,
                         "x": 0.0,
                         "y": 0.0
@@ -79,13 +83,15 @@ def create_sketch_circle_tool(plane_id: str, radius_mm: float, state: dict) -> s
         url, 
         json=payload, 
         headers=headers, 
-        auth=HTTPBasicAuth(access_key, secret_key)
+        auth=requests.auth.HTTPBasicAuth(access_key, secret_key)
     )
     
     if response.status_code in [200, 201]:
         return f"Successfully updated your workspace! Drawn a {radius_mm}mm radius circle on plane '{plane_id}'."
     else:
         return f"Onshape API Rejected Request: {response.text}"
+
+
 
 # 🌟 2. NATIVE PRODUCTION TOOL: Extrude Feature
 @tool
