@@ -111,7 +111,7 @@ def api_chat(request):
         work_id = cad_context.get('workspaceId')
         elem_id = cad_context.get('elementId')
         
-        # 🪵 LOG: Inbound Frontend Packet Context
+        # 🪵 LOG: Input packet parameters
         log_agent_interaction("INBOUND USER PROMPT & STATE CONTEXT", {
             "prompt": user_prompt,
             "documentId": doc_id,
@@ -135,8 +135,21 @@ def api_chat(request):
         
         for event in graph.stream(initial_state, stream_mode="updates"):
             for node_name, state_update in event.items():
-                # 🪵 LOG: Complete capture of what the LLM decided to do at this exact step
-                log_agent_interaction(f"GRAPH NODE STATE UPDATE: {node_name.upper()}", state_update)
+                
+                # 💥 THE FIX: Recursively clean and stringify any HumanMessage/AIMessage objects inside the state dictionary
+                serializable_update = {}
+                for key, val in state_update.items():
+                    if key == "messages":
+                        # Convert message list instances to a clean text array
+                        serializable_update[key] = [
+                            f"{type(msg).__name__}: {msg.content}" if hasattr(msg, 'content') else str(msg)
+                            for msg in val
+                        ]
+                    else:
+                        serializable_update[key] = val
+
+                # 🪵 LOG: Now safe to dump cleanly as JSON string tokens
+                log_agent_interaction(f"GRAPH NODE STATE UPDATE: {node_name.upper()}", serializable_update)
                 
                 if "messages" in state_update and state_update["messages"]:
                     latest_msg = state_update["messages"][-1]
@@ -161,8 +174,6 @@ def api_chat(request):
     except Exception as e:
         log_agent_interaction("CRITICAL API CHAT RUNTIME EXCEPTION", str(e))
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-    
-
 
 
 def view_agent_logs(request):
