@@ -31,19 +31,25 @@ def create_sketch_circle_tool(plane_id: str, radius_mm: float, state: dict) -> s
     work_id = state.get('work_id')
     elem_id = state.get('elem_id')
     
-    # access_key = os.environ.get("ONSHAPE_ACCESS_KEY")
-    # secret_key = os.environ.get("ONSHAPE_SECRET_KEY")
     access_key ="on_bYfDyZ0QtxjnQOAqlSPTD"
     secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
+    
     if not access_key or not secret_key:
         return "Error: Onshape credentials are missing from the Render environment parameters."
 
-    # Convert mm to meters for the native API call
+    # Standard Onshape REST API handles geometric coordinate tokens strictly in meters
     radius_m = radius_mm / 1000.0
-
     url = f"https://cad.onshape.com/api/v9/partstudios/d/{doc_id}/w/{work_id}/e/{elem_id}/features"
-    
-    # 💥 THE FIX: Updated internal btType maps to align with standard Onshape serialization
+
+    # 💥 THE FIX: Build an absolute evaluation literal for default or custom targets
+    # If the plane_id is a standard base reference (top, front, right), escape its naming wrap string
+    if plane_id.lower() in ["top", "front", "right"]:
+        formatted_plane_name = plane_id.capitalize()
+        query_string = f'query=qCreatedBy(makeId("{formatted_plane_name}"), EntityType.FACE);'
+    else:
+        # Otherwise, treat it as a custom selected face entity topology token from the canvas viewport
+        query_string = f'query=qCreatedBy(makeId("{plane_id}"), EntityType.FACE);'
+
     payload = {
         "feature": {
             "btType": "BTMSketch-151",
@@ -56,7 +62,7 @@ def create_sketch_circle_tool(plane_id: str, radius_mm: float, state: dict) -> s
                     "queries": [
                         {
                             "btType": "BTMIndividualQuery-138",
-                            "queryString": f"query=qCreatedBy(makeId('{plane_id}'), EntityType.FACE);"
+                            "queryString": query_string  # <--- Cleanly injected correctly formatted evaluation literal
                         }
                     ]
                 }
@@ -67,7 +73,7 @@ def create_sketch_circle_tool(plane_id: str, radius_mm: float, state: dict) -> s
                     "centerId": "center",
                     "type": "circle",
                     "geometry": {
-                        "btType": "BTCircle-115",  # <--- FIXED: Swapped from BTCircle-23 to BTCircle-115
+                        "btType": "BTCircle-115",
                         "radius": radius_m,
                         "x": 0.0,
                         "y": 0.0
@@ -90,7 +96,6 @@ def create_sketch_circle_tool(plane_id: str, radius_mm: float, state: dict) -> s
         return f"Successfully updated your workspace! Drawn a {radius_mm}mm radius circle on plane '{plane_id}'."
     else:
         return f"Onshape API Rejected Request: {response.text}"
-
 
 
 # 🌟 2. NATIVE PRODUCTION TOOL: Extrude Feature
