@@ -100,11 +100,11 @@ def evaluate_featurescript(doc_id: str, work_id: str, elem_id: str, script_sourc
 # =====================================================================
 # 🤖 DISCOVERY & COORDINATION NODE
 # =====================================================================
+
 def core_agent_node(state: AgentState):
     llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=OPENAI_HARDCODED_KEY)
     llm_with_tools = llm.bind_tools([onshape_api_call, evaluate_featurescript])
     
-    # Extract live context from the current session state
     doc_id = state.get('doc_id')
     work_id = state.get('work_id')
     elem_id = state.get('elem_id')
@@ -116,32 +116,26 @@ def core_agent_node(state: AgentState):
         f"- Document ID: {doc_id}\n"
         f"- Workspace ID: {work_id}\n"
         f"- Element ID: {elem_id}\n\n"
-        "--- FEATURESCRIPT BOUNDARY RULES ---\n"
-        "When calling 'evaluate_featurescript', DO NOT write top-level declarations like 'annotation', 'export', or custom features.\n"
-        "Instead, write a clean, anonymous functional execution block wrapped in an executable wrapper function structure like this example:\n"
-        "```featurescript\n"
-        "function(context, queries) {\n"
-        "    // Query code to look up geometric attributes safely\n"
-        "    return evaluateQuery(context, qCreatedBy(makeId(\"Top\"), EntityType.FACE));\n"
-        "}\n"
-        "```\n\n"
         "--- PROTOCOL PAYLOAD MANDATE ---\n"
-        "The 'parameters' field inside an engineering feature payload MUST ALWAYS be a JSON Array '[]', never an object '{}'.\n"
-        "Keep placeholder tokens like DOC_ID, WORK_ID, and ELEM_ID literally in your tool path string."
+        "1. To add a feature (sketch, extrude, etc.), POST to '/partstudios/d/DOC_ID/w/WORK_ID/e/ELEM_ID/features'.\n"
+        "2. The 'parameters' field inside an engineering feature payload MUST ALWAYS be a JSON Array '[]', never an object '{}'.\n"
+        "3. Keep placeholder tokens like DOC_ID, WORK_ID, and ELEM_ID literally in your tool path string."
     )
-
-
-
+    
     response = llm_with_tools.invoke([system_msg] + list(state['messages']))
     
     if response.tool_calls:
         tool_call = response.tool_calls[0]
         args = tool_call['args']
         
-        # 💥 THE FIX: Intercept the tool call paths and force real variables into the path strings
         if tool_call['name'] == 'onshape_api_call':
             path_str = args.get('path', '')
-            # Automatically replace any uppercase placeholders with the real active values
+            
+            # 💥 THE FIX: Clean out any guessed version keys like /v9 or /v15 to protect route resolution
+            if path_str.startswith('/v9') or path_str.startswith('/v15'):
+                path_str = path_str.replace('/v9', '').replace('/v15', '')
+                
+            # Automatically swap out placeholder path variables with live hashes
             path_str = path_str.replace('DOC_ID', doc_id).replace('WORK_ID', work_id).replace('ELEM_ID', elem_id)
             args['path'] = path_str
             
@@ -156,6 +150,10 @@ def core_agent_node(state: AgentState):
             return {"messages": [HumanMessage(content=output)]}
             
     return {"messages": [response]}
+
+
+
+
 
 def create_graph():
     workflow = StateGraph(AgentState)
