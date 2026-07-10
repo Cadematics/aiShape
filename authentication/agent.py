@@ -34,8 +34,7 @@ def onshape_api_call(method: str, path: str, body: dict) -> str:
     Executes a generic HTTP request directly against the Onshape REST API.
     Use this to create documents, elements, sketches, or features by providing the exact API path and body.
     """
-    # access_key = os.environ.get("ONSHAPE_ACCESS_KEY")
-    # secret_key = os.environ.get("ONSHAPE_SECRET_KEY")
+
     
     url = f"https://cad.onshape.com/api{path}"
     headers = {
@@ -64,9 +63,7 @@ def evaluate_featurescript(doc_id: str, work_id: str, elem_id: str, script_sourc
     Evaluates a FeatureScript expression in the context of a given Part Studio.
     Use this to look up transient IDs, evaluate queries, or locate faces and sketch regions.
     """
-    # access_key = os.environ.get("ONSHAPE_ACCESS_KEY")
-    # secret_key = os.environ.get("ONSHAPE_SECRET_KEY")
-    
+        
     url = f"https://cad.onshape.com/api/v15/partstudios/d/{doc_id}/w/{work_id}/e/{elem_id}/featurescript"
     
     payload = {
