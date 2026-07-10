@@ -10,7 +10,8 @@ from langchain_core.tools import tool
 
 access_key ="on_bYfDyZ0QtxjnQOAqlSPTD"
 secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
-openai_key="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" 
+openai_key="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"
+ 
 
 
 class AgentState(TypedDict):
