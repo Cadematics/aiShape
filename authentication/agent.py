@@ -8,6 +8,11 @@ from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
 from langchain_core.tools import tool
 
+access_key ="on_bYfDyZ0QtxjnQOAqlSPTD"
+secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
+openai_key="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" 
+
+
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
     doc_id: str
@@ -17,8 +22,6 @@ class AgentState(TypedDict):
 
 
 
-# access_key ="on_bYfDyZ0QtxjnQOAqlSPTD"
-# secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
 
 
 # 🌟 1. NATIVE PRODUCTION TOOL: Create Sketch Entity
@@ -109,8 +112,8 @@ def create_extrude_tool(depth_mm: float, state: dict) -> str:
     print(f'inside create_extrude_tool: doc_id={doc_id}, work_id={work_id}, elem_id={elem_id}, depth_mm={depth_mm}')
 
 
-    access_key = os.environ.get("ONSHAPE_ACCESS_KEY")
-    secret_key = os.environ.get("ONSHAPE_SECRET_KEY")
+    access_key ="on_bYfDyZ0QtxjnQOAqlSPTD"
+    secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"    
     
     url = f"https://cad.onshape.com/api/v9/partstudios/d/{doc_id}/w/{work_id}/e/{elem_id}/features"
     depth_m = depth_mm / 1000.0
@@ -158,7 +161,7 @@ def geometry_agent_node(state: AgentState):
     llm = ChatOpenAI(
         model="gpt-4o", 
         temperature=0, 
-        api_key="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"
+        api_key=openai_key
     )
     llm_with_tools = llm.bind_tools([create_sketch_circle_tool, create_extrude_tool])
     
