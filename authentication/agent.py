@@ -11,6 +11,8 @@ from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AI
 
 OPENAI_HARDCODED_KEY = openai_api_key
 
+
+
 class AgentState(TypedDict):
     messages: Sequence[BaseMessage]
     doc_id: str
