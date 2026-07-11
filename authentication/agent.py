@@ -4,218 +4,59 @@ secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
 openai_api_key="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"
  
 
-import os
-import json
-import requests
-from requests.auth import HTTPBasicAuth
-from typing import TypedDict, Annotated, Sequence, List, Literal
+from typing import TypedDict, Annotated, Sequence, List, Literal, Optional
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
-from langchain_core.tools import tool
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 
 OPENAI_HARDCODED_KEY = openai_api_key
 
 class AgentState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], add_messages]
+    messages: Sequence[BaseMessage]
     doc_id: str
     work_id: str
     elem_id: str
-    selected_entity: dict
-    active_payloads: List[dict]
-
-# =====================================================================
-# 🛠️ TOOL 1: GENERIC ONSHAPE API EXECUTOR (Matches onshape_api_call)
-# =====================================================================
-
-@tool
-def onshape_api_call(method: str, path: str, body: dict) -> str:
-    """
-    Executes a generic HTTP request directly against the Onshape REST API.
-    Use this to create documents, elements, sketches, or features by providing the exact API path and body.
-    """
-    url = f"https://cad.onshape.com/api{path}"
-    headers = {
-        "Accept": "application/json;charset=UTF-8",
-        "Content-Type": "application/json"
-    }
-    
-    try:
-        response = requests.request(
-            method=method.upper(),
-            url=url,
-            json=body,
-            headers=headers,
-            auth=HTTPBasicAuth(access_key, secret_key)
-        )
-        
-        # 💥 THE FIX: Check if the response is valid JSON before parsing it
-        try:
-            response_json = response.json()
-            return f"Status {response.status_code} Response:\n{json.dumps(response_json, indent=2)}"
-        except ValueError:
-            # If it's not JSON, return the raw text payload string directly so the LLM (and you) can debug it!
-            return f"Status {response.status_code} (Non-JSON Response). Raw Body:\n{response.text}"
-            
-    except Exception as e:
-        return f"HTTP Request Failure: {str(e)}"
-
-
-
-
-
-
-# =====================================================================
-# 🛠️ TOOL 2: FEATURESCRIPT EVALUATOR (Matches evalFeatureScript)
-# =====================================================================
-@tool
-def evaluate_featurescript(doc_id: str, work_id: str, elem_id: str, script_source: str) -> str:
-    """
-    Evaluates a FeatureScript expression in the context of a given Part Studio.
-    Use this to look up transient IDs, evaluate queries, or locate faces and sketch regions.
-    """
-    
-        
-    # Standardized endpoint path (using the root /api/ path structure)
-    url = f"https://cad.onshape.com/api/partstudios/d/{doc_id}/w/{work_id}/e/{elem_id}/featurescript"
-    
-    payload = {
-        "script": script_source,
-        "queries": []
-    }
-    
-    try:
-        response = requests.post(url, json=payload, auth=HTTPBasicAuth(access_key, secret_key))
-        
-        # 💥 THE FIX: Safely parse text error fallback routes
-        try:
-            return f"FeatureScript Output:\n{json.dumps(response.json(), indent=2)}"
-        except ValueError:
-            return f"FeatureScript Status {response.status_code} (Non-JSON Response). Raw Body:\n{response.text}"
-            
-    except Exception as e:
-        return f"FeatureScript Execution Failure: {str(e)}"
-
-# =====================================================================
-# 🤖 DISCOVERY & COORDINATION NODE
-# =====================================================================
+    available_tools: List[dict]
+    next_action: Optional[dict]       # Stores the tool call description while waiting for user approval
+    approval_granted: Optional[bool]  # True/False response from the frontend
+    final_reply: Optional[str]
 
 def core_agent_node(state: AgentState):
+    """The model reads the user request and selects the optimal MCP tool action."""
     llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=OPENAI_HARDCODED_KEY)
-    llm_with_tools = llm.bind_tools([onshape_api_call, evaluate_featurescript])
     
-    doc_id = state.get('doc_id')
-    work_id = state.get('work_id')
-    elem_id = state.get('elem_id')
+    # Format the tools so the LLM knows how to declare parameters
+    tools_summary = "\n".join([
+        f"- Name: {t.name}, Description: {t.description}, Schema: {t.inputSchema}"
+        for t in state['available_tools']
+    ])
     
     system_msg = SystemMessage(
-        "You are an elite autonomous Onshape CAD agent modeled after a production MCP architecture.\n"
-        "You manipulate geometry by making direct, structured REST API payloads.\n\n"
-        "--- CURRENT LIVE CONTEXT TOKEN VALUES ---\n"
-        f"- Document ID: {doc_id}\n"
-        f"- Workspace ID: {work_id}\n"
-        f"- Element ID: {elem_id}\n\n"
-        "--- ONSHAPE REST PAYLOAD BLUEPRINT (MANDATE) ---\n"
-        "To build solid geometry like a cylinder, you must execute distinct sequential HTTP requests:\n\n"
-        
-        "STEP 1: CREATE A SKETCH ON A PLANE\n"
-        "POST to '/partstudios/d/DOC_ID/w/WORK_ID/e/ELEM_ID/features' with body:\n"
-        "{\n"
-        "  \"feature\": {\n"
-        "    \"btType\": \"BTMSketch-151\",\n"
-        "    \"featureType\": \"newSketch\",\n"
-        "    \"name\": \"Cylinder Sketch\",\n"
-        "    \"parameters\": [\n"
-        "      {\n"
-        "        \"btType\": \"BTMParameterQueryList-148\",\n"
-        "        \"parameterId\": \"sketchPlane\",\n"
-        "        \"queries\": [{\"btType\": \"BTMIndividualQuery-138\", \"queryString\": \"query=qCreatedBy(makeId(\\\"Top\\\"), EntityType.FACE);\"}]\n"
-        "      }\n"
-        "    ]\n"
-        "  }\n"
-        "}\n\n"
-        
-        "STEP 2: ADD SKETCH ENTITIES (CIRCLE)\n"
-        "Modify the created sketch feature to append your curve entities. The circle geometry object must be defined exactly as:\n"
-        "{\n"
-        "  \"btType\": \"BTMSketchCurve-4\",\n"
-        "  \"type\": \"circle\",\n"
-        "  \"centerId\": \"center\",\n"
-        "  \"geometry\": {\"btType\": \"BTCircle-115\", \"radius\": 0.025, \"x\": 0.0, \"y\": 0.0}\n"
-        "}\n\n"
-        
-        "STEP 3: EXTRUDE USING DETERMINISTIC REGION IDS\n"
-        "To turn the circle into a solid, perform an extrusion operation. You must reference the sketch profile's transient region ID (e.g., \"JGC\"). Format your extrusion payload exactly like this:\n"
-        "{\n"
-        "  \"feature\": {\n"
-        "    \"btType\": \"BTMFeature-134\",\n"
-        "    \"featureType\": \"extrude\",\n"
-        "    \"name\": \"Cylinder Extrusion\",\n"
-        "    \"parameters\": [\n"
-        "      {\n"
-        "        \"btType\": \"BTMParameterEnum-105\",\n"
-        "        \"parameterId\": \"bodyType\",\n"
-        "        \"value\": \"SOLID\"\n"
-        "      },\n"
-        "      {\n"
-        "        \"btType\": \"BTMParameterEnum-105\",\n"
-        "        \"parameterId\": \"operationType\",\n"
-        "        \"value\": \"NEW\"\n"
-        "      },\n"
-        "      {\n"
-        "        \"btType\": \"BTMParameterEnum-105\",\n"
-        "        \"parameterId\": \"endBound\",\n"
-        "        \"value\": \"BLIND\"\n"
-        "      },\n"
-        "      {\n"
-        "        \"btType\": \"BTMParameterQuantity-147\",\n"
-        "        \"parameterId\": \"depth\",\n"
-        "        \"expression\": \"8*cm\"\n"
-        "      },\n"
-        "      {\n"
-        "        \"btType\": \"BTMParameterQueryList-148\",\n"
-        "        \"parameterId\": \"entities\",\n"
-        "        \"queries\": [{\"btType\": \"BTMIndividualQuery-138\", \"queryString\": \"query=qTransient(\\\"JGC\\\");\"}]\n"
-        "      }\n"
-        "    ]\n"
-        "  }\n"
-        "}\n\n"
-        "Keep placeholder tokens like DOC_ID, WORK_ID, and ELEM_ID literally in your tool path string."
+        "You are an elite autonomous Onshape CAD agent acting as an MCP orchestration manager.\n"
+        "Analyze the user's geometric modeling request and choose the next tool action from the available list below.\n\n"
+        "--- AVAILABLE MCP TOOLS ---\n"
+        f"{tools_summary}\n\n"
+        "--- RESPONSE MANDATE ---\n"
+        "If you need to execute an action, return a clean JSON payload specifying the target tool name and parameter arguments:\n"
+        "```json\n"
+        "{\"action\": \"CALL_TOOL\", \"name\": \"tool_name\", \"arguments\": {...}}\n"
+        "```\n"
+        "If the objective is reached, print your final confirmation summary clearly."
     )
     
-    response = llm_with_tools.invoke([system_msg] + list(state['messages']))
+    response = llm.invoke([system_msg] + list(state['messages']))
+    content = response.content
     
-    if response.tool_calls:
-        tool_call = response.tool_calls[0]
-        args = tool_call['args']
-        
-        if tool_call['name'] == 'onshape_api_call':
-            path_str = args.get('path', '')
+    # Parse out structured tool calls if generated by the model
+    if "```json" in content:
+        try:
+            clean_json = content.split("```json")[1].split("```")[0].strip()
+            action_data = json.loads(clean_json)
+            return {"next_action": action_data, "messages": [response]}
+        except:
+            pass
             
-            # 💥 THE FIX: Clean out any guessed version keys like /v9 or /v15 to protect route resolution
-            if path_str.startswith('/v9') or path_str.startswith('/v15'):
-                path_str = path_str.replace('/v9', '').replace('/v15', '')
-                
-            # Automatically swap out placeholder path variables with live hashes
-            path_str = path_str.replace('DOC_ID', doc_id).replace('WORK_ID', work_id).replace('ELEM_ID', elem_id)
-            args['path'] = path_str
-            
-            output = onshape_api_call.invoke(args)
-            return {"messages": [HumanMessage(content=output)]}
-            
-        elif tool_call['name'] == 'evaluate_featurescript':
-            args['doc_id'] = doc_id
-            args['work_id'] = work_id
-            args['elem_id'] = elem_id
-            output = evaluate_featurescript.invoke(args)
-            return {"messages": [HumanMessage(content=output)]}
-            
-    return {"messages": [response]}
-
-
-
-
+    return {"final_reply": content, "messages": [response]}
 
 def create_graph():
     workflow = StateGraph(AgentState)
@@ -223,27 +64,3 @@ def create_graph():
     workflow.add_edge(START, "agent")
     workflow.add_edge("agent", END)
     return workflow.compile()
-
-def run_cad_agent_stream(prompt: str, doc_id: str, work_id: str, elem_id: str, selected_entity: dict):
-    """Compiles the graph and yields state updates and agent thoughts dynamically."""
-    try:
-        graph = create_graph()
-        initial_state = {
-            "messages": [HumanMessage(content=prompt)],
-            "doc_id": doc_id or "",
-            "work_id": work_id or "",
-            "elem_id": elem_id or "",
-            "selected_entity": selected_entity or {},
-            "active_payloads": []
-        }
-        
-        # Using stream() to capture individual node operations and LLM tokens
-        for event in graph.stream(initial_state, stream_mode="updates"):
-            for node_name, state_update in event.items():
-                # Yield a structured event log for the view controller to stream
-                yield {
-                    "node": node_name,
-                    "update": {k: (v if k != "messages" else v[-1].content) for k, v in state_update.items() if v}
-                }
-    except Exception as e:
-        yield {"error": str(e)}
