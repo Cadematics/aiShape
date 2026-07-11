@@ -1,9 +1,3 @@
-access_key ="on_bYfDyZ0QtxjnQOAqlSPTD"
-secret_key="aeSrt2XWfSFFTxOwiUMtHKnpaNNQfBrqAnekcX7VgSqeo2xL"
-openai_api_key="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"
-
-
-
 import os
 import json
 import requests
@@ -12,10 +6,25 @@ from django.views.decorators.csrf import csrf_exempt
 from asgiref.sync import async_to_sync
 from langchain_core.messages import HumanMessage, AIMessage
 from .agent import create_graph
-from .mcp_client import mcp_manager  # Import our subprocess singleton manager
-
+from .mcp_client import mcp_manager
 
 LOG_FILE_PATH = os.path.join(os.path.dirname(__file__), 'agent_chat.log')
+
+# 💥 THE CORE LOOKUP UTILITY: Resolves the AttributeError completely
+def log_agent_interaction(title, data):
+    """Safely records diagnostic trace strings into the local tracking block."""
+    try:
+        from datetime import datetime
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(LOG_FILE_PATH, 'a', encoding='utf-8') as f:
+            f.write(f"\n==================== [{timestamp}] {title} ====================\n")
+            if isinstance(data, (dict, list)):
+                f.write(json.dumps(data, indent=2))
+            else:
+                f.write(str(data))
+            f.write("\n")
+    except Exception as e:
+        print(f"[LOGGING ERROR] Failed to write step: {str(e)}")
 
 # =====================================================================
 # 🌐 ONSHAPE OAUTH HANDSHAKE HANDLER
@@ -78,6 +87,15 @@ def api_chat(request):
         work_id = cad_context.get('workspaceId')
         elem_id = cad_context.get('elementId')
         
+        # 🪵 LOG: Track raw inbound payloads safely
+        log_agent_interaction("INBOUND USER REQUEST CONTEXT", {
+            "prompt": user_prompt,
+            "documentId": doc_id,
+            "workspaceId": work_id,
+            "approved": has_approved,
+            "pendingAction": pending_action
+        })
+        
         # 1. Initialize background stdio subprocesses dynamically
         async_to_sync(mcp_manager.initialize)()
         available_tools = async_to_sync(mcp_manager.get_tools)()
@@ -85,7 +103,6 @@ def api_chat(request):
         # 2. Reconstruct session interaction tokens
         messages = []
         for msg in chat_history_raw:
-            # Shield out markdown structural prompts from internal chat history memory
             if msg.get('isActionPrompt'):
                 continue
             if msg.get('sender') == 'user':
@@ -119,7 +136,10 @@ def api_chat(request):
             "doc_id": doc_id or "",
             "work_id": work_id or "",
             "elem_id": elem_id or "",
-            "available_tools": available_tools,
+            "available_tools": [
+                {"name": t.name, "description": t.description, "inputSchema": t.inputSchema}
+                for t in available_tools
+            ],
             "next_action": pending_action,
             "approval_granted": has_approved,
             "final_reply": None
@@ -143,6 +163,7 @@ def api_chat(request):
         
     except Exception as e:
         print(f"[CRITICAL CHAT EXCEPTION]: {str(e)}")
+        log_agent_interaction("CRITICAL CHAT EXCEPTION ERROR LOG", str(e))
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
 
 # =====================================================================
@@ -150,7 +171,7 @@ def api_chat(request):
 # =====================================================================
 def view_agent_logs(request):
     if not os.path.exists(LOG_FILE_PATH):
-        return HttpResponse("<html><body><h3>Log file is currently empty or hasn't been created yet.</h3></body></html>")
+        return HttpResponse("<html><body style='background:#1e1e1e;color:#fff;'><h3>Log file is currently empty or hasn't been created yet.</h3></body></html>")
     with open(LOG_FILE_PATH, 'r', encoding='utf-8') as f:
         log_content = f.read()
     html_layout = f"""
