@@ -69,6 +69,9 @@ def onshape_callback(request):
 # =====================================================================
 # 🤖 ACTIVE AGENT CHAT CONTROL LOOP (WITH HUMAN-IN-THE-LOOP CONTROLS)
 # =====================================================================
+
+# Replace your active api_chat function block with this implementation:
+
 @csrf_exempt
 def api_chat(request):
     if request.method != 'POST':
@@ -87,20 +90,16 @@ def api_chat(request):
         work_id = cad_context.get('workspaceId')
         elem_id = cad_context.get('elementId')
         
-        # 🪵 LOG: Track raw inbound payloads safely
         log_agent_interaction("INBOUND USER REQUEST CONTEXT", {
             "prompt": user_prompt,
             "documentId": doc_id,
-            "workspaceId": work_id,
             "approved": has_approved,
             "pendingAction": pending_action
         })
         
-        # 1. Initialize background stdio subprocesses dynamically
-        async_to_sync(mcp_manager.initialize)()
-        available_tools = async_to_sync(mcp_manager.get_tools)()
+        # 💥 THE FIX: Fetch available tools using the safe, single-session executor
+        available_tools = async_to_sync(mcp_executor.run_with_session)(action_type="GET_TOOLS")
         
-        # 2. Reconstruct session interaction tokens
         messages = []
         for msg in chat_history_raw:
             if msg.get('isActionPrompt'):
@@ -113,13 +112,16 @@ def api_chat(request):
         if user_prompt:
             messages.append(HumanMessage(content=user_prompt))
             
-        # 3. Handle Human-in-the-Loop response decisions
+        # 💥 THE FIX: Call approved tool execution via safe dynamic session context managers
         if has_approved is True and pending_action:
             print(f"[AGENT CORE] User approved execution for tool: {pending_action['name']}")
-            tool_output = async_to_sync(mcp_manager.call_tool)(
-                name=pending_action['name'], 
+            
+            tool_output = async_to_sync(mcp_executor.run_with_session)(
+                action_type="CALL_TOOL",
+                tool_name=pending_action['name'],
                 arguments=pending_action['arguments']
             )
+            
             messages.append(HumanMessage(content=f"System Notification: Tool execution response data: {json.dumps(tool_output)}"))
             has_approved = None
             pending_action = None
@@ -136,10 +138,7 @@ def api_chat(request):
             "doc_id": doc_id or "",
             "work_id": work_id or "",
             "elem_id": elem_id or "",
-            "available_tools": [
-                {"name": t.name, "description": t.description, "inputSchema": t.inputSchema}
-                for t in available_tools
-            ],
+            "available_tools": available_tools,
             "next_action": pending_action,
             "approval_granted": has_approved,
             "final_reply": None
@@ -147,7 +146,6 @@ def api_chat(request):
         
         output_state = graph.invoke(initial_state)
         
-        # 5. Route output state properties back to frontend
         if output_state.get("next_action"):
             action = output_state["next_action"]
             return JsonResponse({
@@ -165,6 +163,7 @@ def api_chat(request):
         print(f"[CRITICAL CHAT EXCEPTION]: {str(e)}")
         log_agent_interaction("CRITICAL CHAT EXCEPTION ERROR LOG", str(e))
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
+
 
 # =====================================================================
 # 📄 DIAGNOSTIC & TELEMETRY MONITORING CONTROLS
