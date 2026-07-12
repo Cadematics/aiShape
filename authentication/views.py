@@ -113,15 +113,30 @@ def api_chat(request):
                 
         if user_prompt:
             messages.append(HumanMessage(content=user_prompt))
+
             
+        # 💥 REPLACE THIS SPECIFIC IF-BLOCK INSIDE YOUR api_chat VIEW:
         if has_approved is True and pending_action:
             print(f"[AGENT CORE] User approved execution for tool: {pending_action['name']}")
-            tool_output = async_to_sync(mcp_executor.run_with_session)(
+            
+            tool_output_raw = async_to_sync(mcp_executor.run_with_session)(
                 action_type="CALL_TOOL",
                 tool_name=pending_action['name'],
                 arguments=pending_action['arguments']
             )
-            messages.append(HumanMessage(content=f"System Notification: Tool execution response data: {json.dumps(tool_output)}"))
+            
+            # 💥 THE CORE FIX: Unpack TextContent objects down to their raw string values
+            clean_output_list = []
+            for block in (tool_output_raw or []):
+                if hasattr(block, 'text'):
+                    clean_output_list.append(block.text)
+                else:
+                    clean_output_list.append(str(block))
+            
+            # Convert the cleanly unpacked string list safely into a single string token
+            final_tool_string = "\n".join(clean_output_list)
+            
+            messages.append(HumanMessage(content=f"System Notification: Tool execution response data: {final_tool_string}"))
             has_approved = None
             pending_action = None
             
