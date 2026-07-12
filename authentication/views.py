@@ -169,15 +169,35 @@ def api_chat(request):
 # 📄 DIAGNOSTIC & TELEMETRY MONITORING CONTROLS
 # =====================================================================
 def view_agent_logs(request):
+    """Renders the logs along with a live sanity check of the MCP Server connection."""
+    mcp_status = "🔴 Disconnected / Error"
+    discovered_tools = []
+    
+    try:
+        # Fire a quick dynamic session handshake check to see if the subprocess boots
+        from .mcp_client import mcp_executor
+        discovered_tools = async_to_sync(mcp_executor.run_with_session)(action_type="GET_TOOLS")
+        if discovered_tools:
+            mcp_status = f"🟢 Connected ({len(discovered_tools)} tools discovered)"
+    except Exception as e:
+        mcp_status = f"🔴 Connection Failure: {str(e)}"
+
     if not os.path.exists(LOG_FILE_PATH):
-        return HttpResponse("<html><body style='background:#1e1e1e;color:#fff;'><h3>Log file is currently empty or hasn't been created yet.</h3></body></html>")
-    with open(LOG_FILE_PATH, 'r', encoding='utf-8') as f:
-        log_content = f.read()
+        log_content = "Log file empty."
+    else:
+        with open(LOG_FILE_PATH, 'r', encoding='utf-8') as f:
+            log_content = f.read()
+
+    # Formulate a diagnostic info card summary array
+    tools_list_html = "".join([f"<li><code>{t['name']}</code>: {t['description']}</li>" for t in discovered_tools or []])
+
     html_layout = f"""
     <html>
     <head><title>aiShape Agent Audit Dashboard</title></head>
     <body style="background:#1e1e1e; color:#d4d4d4; font-family:monospace; padding:20px;">
-        <div style="background:#2d2d2d; padding:10px; margin-bottom:20px; border-radius:4px;">
+        <div style="background:#2d2d2d; padding:15px; margin-bottom:20px; border-radius:4px; border-left: 5px solid #007acc;">
+            <h3>🔌 MCP Server Live Link Status: <span style="font-weight:bold;">{mcp_status}</span></h3>
+            <ul>{tools_list_html}</ul>
             <a href="/api/logs/clear/" style="color:#f44336; font-weight:bold; text-decoration:none;">⚠️ Delete Logs & Start Fresh</a>
         </div>
         <pre style="white-space:pre-wrap;">{log_content}</pre>
