@@ -70,7 +70,6 @@ def onshape_callback(request):
 # 🤖 ACTIVE AGENT CHAT CONTROL LOOP (WITH HUMAN-IN-THE-LOOP CONTROLS)
 # =====================================================================
 
-# Replace your active api_chat function block with this implementation:
 
 @csrf_exempt
 def api_chat(request):
