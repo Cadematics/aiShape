@@ -23,6 +23,7 @@ class AgentState(TypedDict):
     approval_granted: Optional[bool]
     final_reply: Optional[str]
 
+
 def core_agent_node(state: AgentState):
     """The model reads the user request and selects the optimal MCP tool action."""
     llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=OPENAI_HARDCODED_KEY)
@@ -53,17 +54,27 @@ def core_agent_node(state: AgentState):
     response = llm.invoke([system_msg] + list(state['messages']))
     content = response.content.strip()
     
-    # 💥 DEFENSIVE PARSING ENGINE: Captures JSON blocks with or without backtick wrappers
-    json_match = re.search(r'(\{.*?\})', content, re.DOTALL)
-    if json_match:
+    # 💥 Strategy 1: Look for clean markdown code block fences first
+    markdown_json_match = re.search(r'```json\s*(\{.*?\})\s*```', content, re.DOTALL | re.IGNORECASE)
+    
+    # 💥 Strategy 2: Fall back to pulling from the absolute first '{' to the absolute last '}' 
+    if markdown_json_match:
+        json_string_to_parse = markdown_json_match.group(1)
+    else:
+        fallback_match = re.search(r'(\{.*\})', content, re.DOTALL)
+        json_string_to_parse = fallback_match.group(1) if fallback_match else None
+
+    if json_string_to_parse:
         try:
-            action_data = json.loads(json_match.group(1))
+            action_data = json.loads(json_string_to_parse.strip())
             if action_data.get("action") == "CALL_TOOL" or "name" in action_data:
+                print(f"[AGENT PARSE SUCCESS] Intercepted valid action token payload: {action_data.get('name')}")
                 return {"next_action": action_data, "messages": [response]}
         except Exception as parse_err:
-            print(f"[AGENT PARSE WARNING] Text block contained pseudo-JSON but failed load: {str(parse_err)}")
+            print(f"[AGENT PARSE WARNING] Clean extraction failed to load: {str(parse_err)}")
             
     return {"final_reply": content, "messages": [response]}
+
 
 def create_graph():
     workflow = StateGraph(AgentState)
