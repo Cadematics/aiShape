@@ -86,18 +86,21 @@ def api_chat(request):
         pending_action = data.get('pendingAction', None)
         chat_history_raw = data.get('history', [])
         
+        # Extract the fields from the incoming payload
         doc_id = cad_context.get('documentId')
         work_id = cad_context.get('workspaceId')
         elem_id = cad_context.get('elementId')
         
+        # 🪵 LOG: Now logs all incoming context parameters accurately
         log_agent_interaction("INBOUND USER REQUEST CONTEXT", {
             "prompt": user_prompt,
             "documentId": doc_id,
+            "workspaceId": work_id,
+            "elementId": elem_id,
             "approved": has_approved,
             "pendingAction": pending_action
         })
         
-        # 💥 THE FIX: Fetch available tools using the safe, single-session executor
         available_tools = async_to_sync(mcp_executor.run_with_session)(action_type="GET_TOOLS")
         
         messages = []
@@ -112,16 +115,13 @@ def api_chat(request):
         if user_prompt:
             messages.append(HumanMessage(content=user_prompt))
             
-        # 💥 THE FIX: Call approved tool execution via safe dynamic session context managers
         if has_approved is True and pending_action:
             print(f"[AGENT CORE] User approved execution for tool: {pending_action['name']}")
-            
             tool_output = async_to_sync(mcp_executor.run_with_session)(
                 action_type="CALL_TOOL",
                 tool_name=pending_action['name'],
                 arguments=pending_action['arguments']
             )
-            
             messages.append(HumanMessage(content=f"System Notification: Tool execution response data: {json.dumps(tool_output)}"))
             has_approved = None
             pending_action = None
@@ -135,6 +135,7 @@ def api_chat(request):
         graph = create_graph()
         initial_state = {
             "messages": messages,
+            # 💥 THE CORE FIX: Pass the live extracted variables straight into LangGraph!
             "doc_id": doc_id or "",
             "work_id": work_id or "",
             "elem_id": elem_id or "",
@@ -163,8 +164,6 @@ def api_chat(request):
         print(f"[CRITICAL CHAT EXCEPTION]: {str(e)}")
         log_agent_interaction("CRITICAL CHAT EXCEPTION ERROR LOG", str(e))
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
-
-
 # =====================================================================
 # 📄 DIAGNOSTIC & TELEMETRY MONITORING CONTROLS
 # =====================================================================
