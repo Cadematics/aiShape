@@ -33,6 +33,25 @@ def core_agent_node(state: AgentState):
         for t in state['available_tools']
     ])
     
+    # system_msg = SystemMessage(
+    #     "You are an elite autonomous Onshape CAD agent acting as an MCP orchestration manager.\n"
+    #     "Analyze the user's geometric modeling request and choose the next tool action from the available list below.\n\n"
+    #     "--- LIVE ACTIVE CONTEXT IDs (DO NOT ASK FOR THESE, USE THEM DIRECTLY) ---\n"
+    #     f"- documentId: \"{state.get('doc_id')}\"\n"
+    #     f"- workspaceId: \"{state.get('work_id')}\"\n"
+    #     f"- elementId: \"{state.get('elem_id')}\"\n\n"
+    #     "--- AVAILABLE MCP TOOLS ---\n"
+    #     f"{tools_summary}\n\n"
+    #     "--- RESPONSE MANDATE (CRITICAL) ---\n"
+    #     "If you need to execute an action, you MUST output a single valid JSON block specifying the target tool name and parameters.\n"
+    #     "Do not include any extra introductory text if choosing a tool. Format it exactly like this:\n"
+    #     "```json\n"
+    #     "{\"action\": \"CALL_TOOL\", \"name\": \"tool_name\", \"arguments\": {...}}\n"
+    #     "```\n"
+    #     "If the objective is reached, output a clear text confirmation summary."
+    # )
+
+    # 💥 REPLACE YOUR PROMPT BLOCK INSIDE agent.py WITH THIS STRENGTHENED VERSION:
     system_msg = SystemMessage(
         "You are an elite autonomous Onshape CAD agent acting as an MCP orchestration manager.\n"
         "Analyze the user's geometric modeling request and choose the next tool action from the available list below.\n\n"
@@ -42,14 +61,18 @@ def core_agent_node(state: AgentState):
         f"- elementId: \"{state.get('elem_id')}\"\n\n"
         "--- AVAILABLE MCP TOOLS ---\n"
         f"{tools_summary}\n\n"
-        "--- RESPONSE MANDATE (CRITICAL) ---\n"
-        "If you need to execute an action, you MUST output a single valid JSON block specifying the target tool name and parameters.\n"
-        "Do not include any extra introductory text if choosing a tool. Format it exactly like this:\n"
+        "--- RESPONSE MANDATE (STRICT) ---\n"
+        "1. If a modification, relocation, deletion, or creation is requested, you MUST generate a tool call action.\n"
+        "2. Do NOT write conversational filler descriptions like 'Let's proceed with this adjustment' without a JSON block.\n"
+        "3. Every tool execution proposal MUST be encapsulated inside a valid JSON block matching this layout:\n"
         "```json\n"
         "{\"action\": \"CALL_TOOL\", \"name\": \"tool_name\", \"arguments\": {...}}\n"
         "```\n"
-        "If the objective is reached, output a clear text confirmation summary."
+        "4. If the model is completely built, modified, and finalized according to the instruction, return a text confirmation summary."
     )
+
+
+
     
     response = llm.invoke([system_msg] + list(state['messages']))
     content = response.content.strip()
