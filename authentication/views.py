@@ -7,6 +7,7 @@ from asgiref.sync import async_to_sync
 from langchain_core.messages import HumanMessage, AIMessage
 from .agent import create_graph
 from .mcp_client import mcp_executor
+import re
 
 LOG_FILE_PATH = os.path.join(os.path.dirname(__file__), 'agent_chat.log')
 
