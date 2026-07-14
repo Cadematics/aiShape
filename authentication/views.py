@@ -148,10 +148,19 @@ def api_chat(request):
             messages.append(HumanMessage(content=user_prompt))
             
         # Execute approved step
+        # 💥 REPLACE THIS SPECIFIC APPROVAL IF-BLOCK IN views.py:
         if has_approved is True and pending_action:
             if pending_action.get("action") == "INITIALIZE_PLAN":
                 print("[AGENT CORE] Plan initialization approved.")
                 messages.append(HumanMessage(content="System Notification: The plan has been approved. Please propose the first modeling step now."))
+                
+                # 💥 THE CORE FIX: Commit the extracted steps back to the active session parameters!
+                steps = pending_action.get("arguments", {}).get("steps", [])
+                if steps:
+                    session_plan = steps
+                    request.session["active_plan"] = steps
+                    request.session["current_step_index"] = 0
+                    print(f"[SESSION ENGINE] Successfully locked plan steps: {steps}")
             else:
                 print(f"[AGENT CORE] Executing step {session_step_idx + 1}: {pending_action['name']}")
                 tool_output_raw = async_to_sync(mcp_executor.run_with_session)(
@@ -173,7 +182,6 @@ def api_chat(request):
                 # Extract and store generated feature IDs and transient face IDs dynamically
                 if "featureId" in final_tool_string or "id" in final_tool_string or "transientId" in final_tool_string:
                     try:
-                        # Attempt to parse both feature IDs and transient/deterministic geometric query matches
                         feat_match = re.search(r'"(?:featureId|id)"\s*:\s*"([^"]+)"', final_tool_string)
                         transient_match = re.search(r'"transientId"\s*:\s*"([^"]+)"', final_tool_string)
                         
@@ -197,7 +205,7 @@ def api_chat(request):
             has_approved = None
             pending_action = None
             request.session.modified = True
-            
+                
         elif has_approved == False:
             messages.append(HumanMessage(content="System Notification: User aborted current step. Stop execution."))
             request.session["active_plan"] = []
