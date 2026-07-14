@@ -26,7 +26,6 @@ class AgentState(TypedDict):
     plan: List[str]
     current_step_index: int
 
-
 def core_agent_node(state: AgentState):
     """The model reads active state context and decides on the next design or diagnostic action."""
     llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=OPENAI_HARDCODED_KEY)
@@ -50,11 +49,10 @@ def core_agent_node(state: AgentState):
 
     system_msg = SystemMessage(
         "You are an elite autonomous Onshape CAD agent acting as an MCP orchestration manager.\n"
-        "You have access to a local development sandbox environment. When dealing with complex nested "
-        "JSON geometries (such as creating Onshape sketches, geometric constraints, or extrusion features), "
-        "do not try to write out massive JSON manually if it risks syntax breakdown. Instead, feel free to "
-        "write a local helper Python script to generate clean payloads, execute it via your terminal tools, "
-        "and read the clean output file.\n\n"
+        "You have access to a local development sandbox environment equipped with system tools ('Create', 'Read', 'ListDir', 'Bash').\n"
+        "When dealing with complex geometries (like sketches with multiple lines and constraints for a wine glass), "
+        "do not write them line-by-line. Instead, write a local helper Python script using the 'Create' tool to calculate the points and output a raw JSON payload, "
+        "execute it via 'Bash' (running python /path/to/script.py), and read the generated JSON file with the 'Read' tool. Then send it directly to Onshape.\n\n"
         "--- LIVE ACTIVE CONTEXT IDs (DO NOT ASK FOR THESE) ---\n"
         f"- documentId: \"{state.get('doc_id')}\"\n"
         f"- workspaceId: \"{state.get('work_id')}\"\n"
@@ -62,13 +60,15 @@ def core_agent_node(state: AgentState):
         f"{plan_state_desc}"
         "--- AVAILABLE MCP TOOLS ---\n"
         f"{tools_summary}\n\n"
-        "--- RESPONSE MANDATE (STRICT) ---\n"
-        "If you need to execute an action, you MUST output a single valid JSON block specifying the target tool name and parameters.\n"
-        "Do not include any extra introductory text if choosing a tool. Format it exactly like this:\n"
+        "--- OPERATIONAL MANDATE (STRICT) ---\n"
+        "1. When the user approves plan initialization (the prompt is 'Approved'), do NOT write conversational filler about starting.\n"
+        "   Immediately propose the first action (such as running 'Create' to write your geometry generator script or invoking an Onshape tool).\n"
+        "2. All system actions ('Create', 'Read', 'ListDir', 'Bash') run autonomously in the background without needing user approval.\n"
+        "3. You must only stop and seek user approval before sending state-modifying CAD feature creation tools to Onshape.\n"
+        "4. Every tool execution proposal MUST be a valid JSON block enclosed in markdown backticks:\n"
         "```json\n"
         "{\"action\": \"CALL_TOOL\", \"name\": \"tool_name\", \"arguments\": {...}}\n"
-        "```\n"
-        "If the objective is reached, output a clear text confirmation summary."
+        "```"
     )
 
     response = llm.invoke([system_msg] + list(state['messages']))
@@ -91,7 +91,6 @@ def core_agent_node(state: AgentState):
             pass
             
     return {"final_reply": content, "messages": [response], "next_action": None}
-
 
 def should_continue(state: AgentState) -> Literal["continue", "exit"]:
     """Determines whether a tool can be run autonomously in the background, or if we must ask the user."""

@@ -256,7 +256,6 @@ def api_chat(request):
                         "arguments": {"steps": cleaned_steps}
                     }
                 })
-        
         if proposed_action:
             action = proposed_action
             step_name = session_plan[session_step_idx] if session_step_idx < len(session_plan) else action['name']
