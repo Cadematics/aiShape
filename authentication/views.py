@@ -122,7 +122,9 @@ def api_chat(request):
 
         # Clear active design loop cache when a brand new user request is submitted
         is_state_marker = user_prompt in ["Approved", "Rejected"]
-        if user_prompt and not has_approved and not is_state_marker:
+        
+        # If there's no active plan, or if the user is explicitly starting over, clear the state
+        if user_prompt and not has_approved and not is_state_marker and not session_plan:
             session_plan = []
             session_step_idx = 0
             scene_elements = {}
@@ -230,6 +232,28 @@ def api_chat(request):
                 f"{json.dumps(scene_elements, indent=2)}\n"
                 "Use these structural element IDs and transient face references exactly as parameters when constructing subsequent features."
             )] + list(initial_state["messages"])
+
+
+        # 💥 ADD THIS DEBUG LOGGER IN views.py RIGHT BEFORE graph.invoke():
+        print("\n==================== [LLM CONTEXT TRANSMISSION AUDIT] ====================")
+        print(f"ACTIVE SYSTEM PLAN IN STATE: {session_plan}")
+        print(f"ACTIVE STEP INDEX IN STATE: {session_step_idx}")
+        print(f"SCENE ELEMENTS CACHE: {json.dumps(scene_elements)}")
+        print("-------------------- CONVERSATION HISTORY SENT TO GPT-4o --------------------")
+        for i, msg in enumerate(initial_state["messages"]):
+            role_tag = "SYSTEM" if isinstance(msg, SystemMessage) else ("USER" if isinstance(msg, HumanMessage) else "ASSISTANT")
+            # Slice long responses to keep log readable
+            clean_content = msg.content if len(msg.content) < 300 else f"{msg.content[:300]}... [truncated]"
+            print(f"[{i}] {role_tag}: {clean_content}")
+        print("==========================================================================")
+
+        output_state = graph.invoke(initial_state)
+        
+        # 💥 ADD THIS POST-INVOKE LOGGER RIGHT AFTER IT:
+        print("\n==================== [LLM RESPONSE AUDIT] ====================")
+        print(f"AI FINAL REPLY (PROSE): {output_state.get('final_reply')}")
+        print(f"AI NEXT ACTION (TOOL): {json.dumps(output_state.get('next_action'), indent=2)}")
+        print("================================================================")
 
         output_state = graph.invoke(initial_state)
         
