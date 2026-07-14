@@ -11,6 +11,7 @@ from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from .mcp_client import mcp_executor
 from asgiref.sync import async_to_sync
+import re
 
 OPENAI_HARDCODED_KEY = openai_api_key
 
