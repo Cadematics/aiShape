@@ -95,13 +95,16 @@ def api_chat(request):
         work_id = cad_context.get('workspaceId')
         elem_id = cad_context.get('elementId')
 
+ # 💥 REPLACE THIS SPECIFIC IF-BLOCK AT THE TOP OF api_chat IN views.py:
+        
         # Retrieve structural state parameters from the session
         session_plan = request.session.get("active_plan", [])
         session_step_idx = request.session.get("current_step_index", 0)
         scene_elements = request.session.get("active_elements", {})
 
-        # Clear state if a fresh text prompt is submitted from scratch
-        if user_prompt and not has_approved:
+        # Clear state ONLY on genuine new user messages, not on system state transition markers
+        is_state_marker = user_prompt in ["Approved", "Rejected"]
+        if user_prompt and not has_approved and not is_state_marker:
             session_plan = []
             session_step_idx = 0
             scene_elements = {}
