@@ -71,6 +71,8 @@ def onshape_callback(request):
 # =====================================================================
 
 
+# Replace your api_chat view function in authentication/views.py with this updated stateful version:
+
 @csrf_exempt
 def api_chat(request):
     if request.method != 'POST':
@@ -85,19 +87,28 @@ def api_chat(request):
         pending_action = data.get('pendingAction', None)
         chat_history_raw = data.get('history', [])
         
-        # Extract the fields from the incoming payload
         doc_id = cad_context.get('documentId')
         work_id = cad_context.get('workspaceId')
         elem_id = cad_context.get('elementId')
-        
-        # 🪵 LOG: Now logs all incoming context parameters accurately
+
+        # Retain step tracker states across requests using django sessions
+        session_plan = request.session.get("active_plan", [])
+        session_step_idx = request.session.get("current_step_index", 0)
+
+        # Detect new prompts to clear stale plans
+        if user_prompt and not has_approved:
+            session_plan = []
+            session_step_idx = 0
+            request.session["active_plan"] = []
+            request.session["current_step_index"] = 0
+
         log_agent_interaction("INBOUND USER REQUEST CONTEXT", {
             "prompt": user_prompt,
             "documentId": doc_id,
-            "workspaceId": work_id,
-            "elementId": elem_id,
             "approved": has_approved,
-            "pendingAction": pending_action
+            "pendingAction": pending_action,
+            "active_plan": session_plan,
+            "step_index": session_step_idx
         })
         
         available_tools = async_to_sync(mcp_executor.run_with_session)(action_type="GET_TOOLS")
@@ -113,19 +124,16 @@ def api_chat(request):
                 
         if user_prompt:
             messages.append(HumanMessage(content=user_prompt))
-
             
-        # 💥 REPLACE THIS SPECIFIC IF-BLOCK INSIDE YOUR api_chat VIEW:
+        # If the user clicks approve, execute the scheduled tool
         if has_approved is True and pending_action:
-            print(f"[AGENT CORE] User approved execution for tool: {pending_action['name']}")
-            
+            print(f"[AGENT CORE] User approved execution for: {pending_action['name']}")
             tool_output_raw = async_to_sync(mcp_executor.run_with_session)(
                 action_type="CALL_TOOL",
                 tool_name=pending_action['name'],
                 arguments=pending_action['arguments']
             )
             
-            # 💥 THE CORE FIX: Unpack TextContent objects down to their raw string values
             clean_output_list = []
             for block in (tool_output_raw or []):
                 if hasattr(block, 'text'):
@@ -133,39 +141,68 @@ def api_chat(request):
                 else:
                     clean_output_list.append(str(block))
             
-            # Convert the cleanly unpacked string list safely into a single string token
             final_tool_string = "\n".join(clean_output_list)
+            messages.append(HumanMessage(content=f"System Notification: Step {session_step_idx + 1} execution successful. Output details: {final_tool_string}"))
             
-            messages.append(HumanMessage(content=f"System Notification: Tool execution response data: {final_tool_string}"))
+            # Increment the step index
+            session_step_idx += 1
+            request.session["current_step_index"] = session_step_idx
+            
             has_approved = None
             pending_action = None
             
         elif has_approved == False:
-            messages.append(HumanMessage(content="System Notification: The user rejected this operation proposal. Alter strategies."))
+            messages.append(HumanMessage(content="System Notification: The user rejected the proposed action step."))
+            session_plan = []
+            session_step_idx = 0
+            request.session["active_plan"] = []
+            request.session["current_step_index"] = 0
             has_approved = None
             pending_action = None
 
-        # 4. Invoke the LangGraph State Engine Instance
+        # Run LangGraph Agent
         graph = create_graph()
         initial_state = {
             "messages": messages,
-            # 💥 THE CORE FIX: Pass the live extracted variables straight into LangGraph!
             "doc_id": doc_id or "",
             "work_id": work_id or "",
             "elem_id": elem_id or "",
             "available_tools": available_tools,
             "next_action": pending_action,
             "approval_granted": has_approved,
-            "final_reply": None
+            "final_reply": None,
+            "plan": session_plan,
+            "current_step_index": session_step_idx
         }
         
         output_state = graph.invoke(initial_state)
         
-        if output_state.get("next_action"):
-            action = output_state["next_action"]
+        # If the model dynamically discovers/proposes steps, save them to the session
+        proposed_action = output_state.get("next_action")
+        
+        # Parse step lists directly from the final reply content if creating a new plan
+        final_reply = output_state.get("final_reply")
+        if final_reply and not session_plan:
+            # Simple regex search for numbered lines (e.g., "1. Sketch...", "2. Extrude...")
+            found_steps = re.findall(r'^\s*\d+\.\s*(.+)$', final_reply, re.MULTILINE)
+            if found_steps:
+                session_plan = found_steps
+                request.session["active_plan"] = found_steps
+                request.session["current_step_index"] = 0
+                print(f"[SESSION ENGINE] Extracted {len(found_steps)} steps from planner node.")
+                
+                # Propose running step 1
+                return JsonResponse({
+                    "status": "success",
+                    "reply": f"{final_reply}\n\n🤖 **Plan Initialized.** Let's start with Step 1: *{found_steps[0]}*. Please enter a prompt or type 'go' to confirm!"
+                })
+        
+        if proposed_action:
+            action = proposed_action
+            step_name = session_plan[session_step_idx] if session_step_idx < len(session_plan) else action['name']
             return JsonResponse({
                 "status": "requires_approval",
-                "message": f"🤖 **Plan Proposal:** I want to run the tool `{action['name']}` with options: {json.dumps(action['arguments'])}. Do you approve?",
+                "message": f"🤖 **Step {session_step_idx + 1} Proposal: {step_name}**\nI want to run `{action['name']}` with options: {json.dumps(action['arguments'])}",
                 "pendingAction": action
             })
             
@@ -178,6 +215,9 @@ def api_chat(request):
         print(f"[CRITICAL CHAT EXCEPTION]: {str(e)}")
         log_agent_interaction("CRITICAL CHAT EXCEPTION ERROR LOG", str(e))
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
+
+
+
 # =====================================================================
 # 📄 DIAGNOSTIC & TELEMETRY MONITORING CONTROLS
 # =====================================================================
