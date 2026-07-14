@@ -1,3 +1,11 @@
+import json
+import re
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from asgiref.sync import async_to_sync
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from .agent import create_graph
+from .mcp_client import mcp_executor
 import os
 import json
 import requests
@@ -95,14 +103,12 @@ def api_chat(request):
         work_id = cad_context.get('workspaceId')
         elem_id = cad_context.get('elementId')
 
- # 💥 REPLACE THIS SPECIFIC IF-BLOCK AT THE TOP OF api_chat IN views.py:
-        
-        # Retrieve structural state parameters from the session
+        # Retrieve parameters from the session
         session_plan = request.session.get("active_plan", [])
         session_step_idx = request.session.get("current_step_index", 0)
         scene_elements = request.session.get("active_elements", {})
 
-        # Clear state ONLY on genuine new user messages, not on system state transition markers
+        # Clear state ONLY on a brand new user request (not state-transition approvals)
         is_state_marker = user_prompt in ["Approved", "Rejected"]
         if user_prompt and not has_approved and not is_state_marker:
             session_plan = []
@@ -111,19 +117,10 @@ def api_chat(request):
             request.session["active_plan"] = []
             request.session["current_step_index"] = 0
             request.session["active_elements"] = {}
+            request.session.modified = True
 
-        log_agent_interaction("INBOUND USER REQUEST CONTEXT", {
-            "prompt": user_prompt,
-            "documentId": doc_id,
-            "approved": has_approved,
-            "pendingAction": pending_action,
-            "active_plan": session_plan,
-            "step_index": session_step_idx,
-            "scene_elements": scene_elements
-        })
-        
-        available_tools = async_to_sync(mcp_executor.run_with_session)(action_type="GET_TOOLS")
-        
+        print(f"[STATE MONITOR] Incoming prompt: '{user_prompt}' | Approved flag: {has_approved} | Session Index: {session_step_idx} | Plan Length: {len(session_plan)}")
+
         messages = []
         for msg in chat_history_raw:
             if msg.get('isActionPrompt'):
@@ -136,59 +133,67 @@ def api_chat(request):
         if user_prompt:
             messages.append(HumanMessage(content=user_prompt))
             
-        # Execute approved step
+        # 1. Handle user approvals
         if has_approved is True and pending_action:
-            print(f"[AGENT CORE] User approved step {session_step_idx + 1} action: {pending_action['name']}")
-            tool_output_raw = async_to_sync(mcp_executor.run_with_session)(
-                action_type="CALL_TOOL",
-                tool_name=pending_action['name'],
-                arguments=pending_action['arguments']
-            )
-            
-            clean_output_list = []
-            for block in (tool_output_raw or []):
-                if hasattr(block, 'text'):
-                    clean_output_list.append(block.text)
-                else:
-                    clean_output_list.append(str(block))
-            
-            final_tool_string = "\n".join(clean_output_list)
-            messages.append(HumanMessage(content=f"System Notification: Step {session_step_idx + 1} execution response data: {final_tool_string}"))
-            
-            # Extract generated feature IDs from the tool response and update tracking state
-            if "featureId" in final_tool_string or "id" in final_tool_string:
-                try:
-                    # Attempt simple parsing of feature reference tokens
-                    match = re.search(r'"(?:featureId|id)"\s*:\s*"([^"]+)"', final_tool_string)
-                    if match:
-                        feat_id = match.group(1)
-                        step_label = session_plan[session_step_idx] if session_step_idx < len(session_plan) else "element"
-                        scene_elements[step_label] = feat_id
-                        request.session["active_elements"] = scene_elements
-                        print(f"[TRACKER ENGINE] Successfully registered feature element: '{step_label}' -> '{feat_id}'")
-                except:
-                    pass
+            if pending_action.get("action") == "INITIALIZE_PLAN":
+                # User approved plan initialization
+                print("[AGENT CORE] Plan initialization approved.")
+                messages.append(HumanMessage(content="System Notification: The planning phase is approved. Propose Step 1 now."))
+            else:
+                print(f"[AGENT CORE] User approved step {session_step_idx + 1} action: {pending_action['name']}")
+                tool_output_raw = async_to_sync(mcp_executor.run_with_session)(
+                    action_type="CALL_TOOL",
+                    tool_name=pending_action['name'],
+                    arguments=pending_action['arguments']
+                )
+                
+                clean_output_list = []
+                for block in (tool_output_raw or []):
+                    if hasattr(block, 'text'):
+                        clean_output_list.append(block.text)
+                    else:
+                        clean_output_list.append(str(block))
+                
+                final_tool_string = "\n".join(clean_output_list)
+                messages.append(HumanMessage(content=f"System Notification: Step {session_step_idx + 1} execution response data: {final_tool_string}"))
+                
+                # Extract generated feature IDs from the tool response
+                if "featureId" in final_tool_string or "id" in final_tool_string:
+                    try:
+                        match = re.search(r'"(?:featureId|id)"\s*:\s*"([^"]+)"', final_tool_string)
+                        if match:
+                            feat_id = match.group(1)
+                            step_label = session_plan[session_step_idx] if session_step_idx < len(session_plan) else "element"
+                            # Clean step label for logging
+                            step_label_clean = re.sub(r'[*#_]', '', step_label)[:40]
+                            scene_elements[step_label_clean] = feat_id
+                            request.session["active_elements"] = scene_elements
+                            print(f"[TRACKER ENGINE] Registered element: '{step_label_clean}' -> '{feat_id}'")
+                    except Exception as parse_err:
+                        print(f"[TRACKER WARNING] Could not parse featureId: {str(parse_err)}")
 
-            session_step_idx += 1
-            request.session["current_step_index"] = session_step_idx
+                # Advance step index
+                session_step_idx += 1
+                request.session["current_step_index"] = session_step_idx
+
             has_approved = None
             pending_action = None
+            request.session.modified = True
             
         elif has_approved == False:
-            # User rejected or canceled the workflow
-            messages.append(HumanMessage(content="System Notification: User aborted or rejected the current step. Stop execution."))
-            session_plan = []
-            session_step_idx = 0
-            scene_elements = {}
+            # User canceled
+            messages.append(HumanMessage(content="System Notification: User rejected current step. Stop plan."))
             request.session["active_plan"] = []
             request.session["current_step_index"] = 0
             request.session["active_elements"] = {}
+            request.session.modified = True
             return JsonResponse({
                 "status": "success",
-                "reply": "Workflow canceled. All active plans have been stopped and cleared."
+                "reply": "Workflow canceled. Active plans have been cleared."
             })
 
-        # Inject tracking state into state engine parameters
+        # Get tools and run graph
+        available_tools = async_to_sync(mcp_executor.run_with_session)(action_type="GET_TOOLS")
         graph = create_graph()
         initial_state = {
             "messages": messages,
@@ -203,13 +208,12 @@ def api_chat(request):
             "current_step_index": session_step_idx
         }
         
-        # Inject tracking elements as system metadata
+        # Inject known elements system context
         if scene_elements:
             initial_state["messages"] = [SystemMessage(
-                content=f"--- KNOWN ACTIVE GEOMETRY TRACKER STATS ---\n"
-                f"The following elements have been created on Onshape in previous steps of this plan:\n"
+                content=f"--- ACTIVE MODEL ELEMENTS IN SCENE ---\n"
                 f"{json.dumps(scene_elements, indent=2)}\n"
-                "Use these active IDs directly as parameters when calling featurescript or extrude tools."
+                "Use these IDs as parameters when calling subsequent tools."
             )] + list(initial_state["messages"])
 
         output_state = graph.invoke(initial_state)
@@ -217,22 +221,26 @@ def api_chat(request):
         proposed_action = output_state.get("next_action")
         final_reply = output_state.get("final_reply")
         
-        # Extract plan if newly created
+        # 2. Extract plan if newly created
         if final_reply and not session_plan:
+            # Clean raw matching lines from LLM response
             found_steps = re.findall(r'^\s*\d+\.\s*(.+)$', final_reply, re.MULTILINE)
             if found_steps:
-                session_plan = found_steps
-                request.session["active_plan"] = found_steps
+                # Strip markdown asterisks and bold tags
+                cleaned_steps = [re.sub(r'[*_#]', '', step).strip() for step in found_steps]
+                session_plan = cleaned_steps
+                request.session["active_plan"] = cleaned_steps
                 request.session["current_step_index"] = 0
+                request.session.modified = True
+                print(f"[SESSION ENGINE] Saved cleaned steps: {cleaned_steps}")
                 
-                # 💥 FIX: Send plan initialization with 'requires_approval' status so buttons render
                 return JsonResponse({
                     "status": "requires_approval",
-                    "message": f"{final_reply}\n\n🤖 **Plan Initialized.** I will guide you through this step-by-step. Do you approve initializing this sequence?",
+                    "message": f"{final_reply}\n\n🤖 **Plan Initialized.** Do you approve initializing this modeling sequence?",
                     "pendingAction": {
                         "action": "INITIALIZE_PLAN",
                         "name": "initialize_plan",
-                        "arguments": {"steps": found_steps}
+                        "arguments": {"steps": cleaned_steps}
                     }
                 })
         
@@ -247,14 +255,12 @@ def api_chat(request):
             
         return JsonResponse({
             "status": "success",
-            "reply": output_state.get("final_reply", "Task processed successfully.")
+            "reply": output_state.get("final_reply", "Task completed.")
         })
         
     except Exception as e:
         print(f"[CRITICAL CHAT EXCEPTION]: {str(e)}")
-        log_agent_interaction("CRITICAL CHAT EXCEPTION ERROR LOG", str(e))
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
-
 # =====================================================================
 # 📄 DIAGNOSTIC & TELEMETRY MONITORING CONTROLS
 # =====================================================================
