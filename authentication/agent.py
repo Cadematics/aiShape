@@ -8,10 +8,9 @@ import re
 from typing import TypedDict, Annotated, Sequence, List, Literal, Optional
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from .mcp_client import mcp_executor
 from asgiref.sync import async_to_sync
-import re
 
 OPENAI_HARDCODED_KEY = openai_api_key
 
@@ -24,13 +23,12 @@ class AgentState(TypedDict):
     next_action: Optional[dict]
     approval_granted: Optional[bool]
     final_reply: Optional[str]
-    # 💥 New Plan State Trackers
     plan: List[str]
     current_step_index: int
 
 
 def core_agent_node(state: AgentState):
-    """The planner/executor node. It generates plans or executes the current pending step."""
+    """The model reads active state context and decides on the next design or diagnostic action."""
     llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=OPENAI_HARDCODED_KEY)
     
     tools_summary = "\n".join([
@@ -52,27 +50,31 @@ def core_agent_node(state: AgentState):
 
     system_msg = SystemMessage(
         "You are an elite autonomous Onshape CAD agent acting as an MCP orchestration manager.\n"
-        "Analyze the user's geometric modeling request and choose the next tool action from the available list below.\n\n"
-        "--- LIVE ACTIVE CONTEXT IDs ---\n"
+        "You have access to a local development sandbox environment. When dealing with complex nested "
+        "JSON geometries (such as creating Onshape sketches, geometric constraints, or extrusion features), "
+        "do not try to write out massive JSON manually if it risks syntax breakdown. Instead, feel free to "
+        "write a local helper Python script to generate clean payloads, execute it via your terminal tools, "
+        "and read the clean output file.\n\n"
+        "--- LIVE ACTIVE CONTEXT IDs (DO NOT ASK FOR THESE) ---\n"
         f"- documentId: \"{state.get('doc_id')}\"\n"
         f"- workspaceId: \"{state.get('work_id')}\"\n"
         f"- elementId: \"{state.get('elem_id')}\"\n\n"
         f"{plan_state_desc}"
         "--- AVAILABLE MCP TOOLS ---\n"
         f"{tools_summary}\n\n"
-        "--- OPERATIONAL PROTOCOLS ---\n"
-        "1. PLAN FIRST: If the user provides a modeling request and there is no active plan yet, you MUST outline the complete list of steps required to fulfill the request. Output this list clearly in text, followed by a JSON tool proposal to save this plan state.\n"
-        "2. STEP-BY-STEP WORKFLOW: If a plan already exists, look at the Next Step to run. Propose ONLY the single JSON tool call necessary to execute that specific step. Do not group multiple steps into one action.\n"
-        "3. Every tool execution proposal MUST be a valid JSON block enclosed in markdown backticks:\n"
+        "--- RESPONSE MANDATE (STRICT) ---\n"
+        "If you need to execute an action, you MUST output a single valid JSON block specifying the target tool name and parameters.\n"
+        "Do not include any extra introductory text if choosing a tool. Format it exactly like this:\n"
         "```json\n"
         "{\"action\": \"CALL_TOOL\", \"name\": \"tool_name\", \"arguments\": {...}}\n"
-        "```"
+        "```\n"
+        "If the objective is reached, output a clear text confirmation summary."
     )
 
     response = llm.invoke([system_msg] + list(state['messages']))
     content = response.content.strip()
     
-    # Unpack JSON block
+    # Extract JSON payloads cleanly
     markdown_json_match = re.search(r'```json\s*(\{.*?\})\s*```', content, re.DOTALL | re.IGNORECASE)
     if markdown_json_match:
         json_string_to_parse = markdown_json_match.group(1)
@@ -84,7 +86,6 @@ def core_agent_node(state: AgentState):
         try:
             action_data = json.loads(json_string_to_parse.strip())
             if action_data.get("action") == "CALL_TOOL" or "name" in action_data:
-                # If a tool is called, keep the output structured
                 return {"next_action": action_data, "messages": [response], "final_reply": None}
         except Exception:
             pass
@@ -92,9 +93,84 @@ def core_agent_node(state: AgentState):
     return {"final_reply": content, "messages": [response], "next_action": None}
 
 
+def should_continue(state: AgentState) -> Literal["continue", "exit"]:
+    """Determines whether a tool can be run autonomously in the background, or if we must ask the user."""
+    action = state.get("next_action")
+    if not action:
+        return "exit"
+        
+    # List of safe, diagnostic, read-only or diagnostic-generation tools
+    BACKGROUND_SAFE_TOOLS = [
+        "get_features", 
+        "get_variables", 
+        "get_parts", 
+        "eval_featurescript", 
+        "get_elements", 
+        "get_document_summary",
+        "onshape_auth_status",
+        "onshape_mcp_get_started",
+        "onshape_list_resources",
+        "onshape_read_resource",
+        "write_to_file",
+        "run_command"
+    ]
+    
+    if action.get("name") in BACKGROUND_SAFE_TOOLS:
+        return "continue"
+        
+    return "exit"
+
+
+def execute_background_tool(state: AgentState):
+    """Runs read-only queries and sandbox tools autonomously without breaking the HTTP response loop."""
+    action = state["next_action"]
+    print(f"[AUTONOMY LOOP] Auto-executing background tool: {action['name']}")
+    
+    tool_output_raw = async_to_sync(mcp_executor.run_with_session)(
+        action_type="CALL_TOOL",
+        tool_name=action['name'],
+        arguments=action['arguments']
+    )
+    
+    # Extract TextContent structure
+    clean_output_list = []
+    for block in (tool_output_raw or []):
+        if hasattr(block, 'text'):
+            clean_output_list.append(block.text)
+        else:
+            clean_output_list.append(str(block))
+            
+    final_tool_string = "\n".join(clean_output_list)
+    
+    # Pack output back into historical state context
+    new_message = AIMessage(
+        content=f"Executed background tool '{action['name']}' automatically. Response: {final_tool_string}"
+    )
+    
+    return {
+        "messages": [new_message],
+        "next_action": None
+    }
+
+
 def create_graph():
     workflow = StateGraph(AgentState)
+    
+    # Nodes
     workflow.add_node("agent", core_agent_node)
+    workflow.add_node("background_tools", execute_background_tool)
+    
+    # Flow Routing
     workflow.add_edge(START, "agent")
-    workflow.add_edge("agent", END)
+    
+    workflow.add_conditional_edges(
+        "agent",
+        should_continue,
+        {
+            "continue": "background_tools",
+            "exit": END
+        }
+    )
+    
+    workflow.add_edge("background_tools", "agent")
     return workflow.compile()

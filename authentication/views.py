@@ -12,78 +12,15 @@ import requests
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from asgiref.sync import async_to_sync
-from langchain_core.messages import HumanMessage, AIMessage
 from .agent import create_graph
 from .mcp_client import mcp_executor
-import re
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from .agent import create_graph
+from .mcp_client import mcp_executor
 
 
+# Replace the views.py contents with this fully synchronized contextual version:
 
-
-LOG_FILE_PATH = os.path.join(os.path.dirname(__file__), 'agent_chat.log')
-
-# 💥 THE CORE LOOKUP UTILITY: Resolves the AttributeError completely
-def log_agent_interaction(title, data):
-    """Safely records diagnostic trace strings into the local tracking block."""
-    try:
-        from datetime import datetime
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        with open(LOG_FILE_PATH, 'a', encoding='utf-8') as f:
-            f.write(f"\n==================== [{timestamp}] {title} ====================\n")
-            if isinstance(data, (dict, list)):
-                f.write(json.dumps(data, indent=2))
-            else:
-                f.write(str(data))
-            f.write("\n")
-    except Exception as e:
-        print(f"[LOGGING ERROR] Failed to write step: {str(e)}")
-
-# =====================================================================
-# 🌐 ONSHAPE OAUTH HANDSHAKE HANDLER
-# =====================================================================
-def onshape_callback(request):
-    auth_code = request.GET.get('code')
-    if not auth_code:
-        return JsonResponse({'status': 'error', 'message': 'No authorization code detected.'}, status=400)
-    
-    client_id = os.environ.get('ONSHAPE_CLIENT_ID', '').strip()
-    client_secret = os.environ.get('ONSHAPE_CLIENT_SECRET', '').strip()
-    actual_redirect_uri = request.build_absolute_uri(request.path)
-
-    token_url = "https://oauth.onshape.com/oauth/token"
-    payload = {
-        'grant_type': 'authorization_code',
-        'code': auth_code,
-        'client_id': client_id,
-        'client_secret': client_secret,
-        'redirect_uri': actual_redirect_uri,
-    }
-    
-    headers = {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json'
-    }
-    
-    response = requests.post(token_url, data=payload, headers=headers)
-    if response.status_code == 200:
-        tokens = response.json()
-        return JsonResponse({
-            'status': 'success', 
-            'message': 'Authenticated with Onshape successfully!',
-            'access_token_preview': tokens.get('access_token')[:10] + "..."
-        })
-    else:
-        return JsonResponse({
-            'status': 'handshake_failed',
-            'onshape_error_payload': response.json()
-        }, status=response.status_code)
-
-# =====================================================================
-# 🤖 ACTIVE AGENT CHAT CONTROL LOOP (WITH HUMAN-IN-THE-LOOP CONTROLS)
-# =====================================================================
-
-
-# Replace your api_chat view function in authentication/views.py with this updated stateful version:
 
 @csrf_exempt
 def api_chat(request):
@@ -103,12 +40,12 @@ def api_chat(request):
         work_id = cad_context.get('workspaceId')
         elem_id = cad_context.get('elementId')
 
-        # Retrieve parameters from the session
+        # Load states from Django session cache
         session_plan = request.session.get("active_plan", [])
         session_step_idx = request.session.get("current_step_index", 0)
         scene_elements = request.session.get("active_elements", {})
 
-        # Clear state ONLY on a brand new user request (not state-transition approvals)
+        # Clear active design loop cache when a brand new user request is submitted
         is_state_marker = user_prompt in ["Approved", "Rejected"]
         if user_prompt and not has_approved and not is_state_marker:
             session_plan = []
@@ -119,7 +56,7 @@ def api_chat(request):
             request.session["active_elements"] = {}
             request.session.modified = True
 
-        print(f"[STATE MONITOR] Incoming prompt: '{user_prompt}' | Approved flag: {has_approved} | Session Index: {session_step_idx} | Plan Length: {len(session_plan)}")
+        print(f"[STATE MONITOR] Prompt: '{user_prompt}' | Approved: {has_approved} | Index: {session_step_idx} | Plan Length: {len(session_plan)}")
 
         messages = []
         for msg in chat_history_raw:
@@ -133,14 +70,13 @@ def api_chat(request):
         if user_prompt:
             messages.append(HumanMessage(content=user_prompt))
             
-        # 1. Handle user approvals
+        # Execute approved step
         if has_approved is True and pending_action:
             if pending_action.get("action") == "INITIALIZE_PLAN":
-                # User approved plan initialization
                 print("[AGENT CORE] Plan initialization approved.")
-                messages.append(HumanMessage(content="System Notification: The planning phase is approved. Propose Step 1 now."))
+                messages.append(HumanMessage(content="System Notification: The plan has been approved. Please propose the first modeling step now."))
             else:
-                print(f"[AGENT CORE] User approved step {session_step_idx + 1} action: {pending_action['name']}")
+                print(f"[AGENT CORE] Executing step {session_step_idx + 1}: {pending_action['name']}")
                 tool_output_raw = async_to_sync(mcp_executor.run_with_session)(
                     action_type="CALL_TOOL",
                     tool_name=pending_action['name'],
@@ -155,24 +91,29 @@ def api_chat(request):
                         clean_output_list.append(str(block))
                 
                 final_tool_string = "\n".join(clean_output_list)
-                messages.append(HumanMessage(content=f"System Notification: Step {session_step_idx + 1} execution response data: {final_tool_string}"))
+                messages.append(HumanMessage(content=f"System Notification: Step {session_step_idx + 1} response data: {final_tool_string}"))
                 
-                # Extract generated feature IDs from the tool response
-                if "featureId" in final_tool_string or "id" in final_tool_string:
+                # Extract and store generated feature IDs and transient face IDs dynamically
+                if "featureId" in final_tool_string or "id" in final_tool_string or "transientId" in final_tool_string:
                     try:
-                        match = re.search(r'"(?:featureId|id)"\s*:\s*"([^"]+)"', final_tool_string)
-                        if match:
-                            feat_id = match.group(1)
-                            step_label = session_plan[session_step_idx] if session_step_idx < len(session_plan) else "element"
-                            # Clean step label for logging
-                            step_label_clean = re.sub(r'[*#_]', '', step_label)[:40]
-                            scene_elements[step_label_clean] = feat_id
-                            request.session["active_elements"] = scene_elements
-                            print(f"[TRACKER ENGINE] Registered element: '{step_label_clean}' -> '{feat_id}'")
+                        # Attempt to parse both feature IDs and transient/deterministic geometric query matches
+                        feat_match = re.search(r'"(?:featureId|id)"\s*:\s*"([^"]+)"', final_tool_string)
+                        transient_match = re.search(r'"transientId"\s*:\s*"([^"]+)"', final_tool_string)
+                        
+                        step_label = session_plan[session_step_idx] if session_step_idx < len(session_plan) else "element"
+                        step_label_clean = re.sub(r'[*#_]', '', step_label)[:40]
+                        
+                        if feat_match:
+                            scene_elements[f"{step_label_clean}_id"] = feat_match.group(1)
+                        if transient_match:
+                            scene_elements[f"{step_label_clean}_transient_face_id"] = transient_match.group(1)
+                            
+                        request.session["active_elements"] = scene_elements
+                        print(f"[TRACKER ENGINE] Registered scene element metrics: {scene_elements}")
                     except Exception as parse_err:
-                        print(f"[TRACKER WARNING] Could not parse featureId: {str(parse_err)}")
+                        print(f"[TRACKER WARNING] Could not parse metadata: {str(parse_err)}")
 
-                # Advance step index
+                # Advance index for actual tool steps
                 session_step_idx += 1
                 request.session["current_step_index"] = session_step_idx
 
@@ -181,8 +122,7 @@ def api_chat(request):
             request.session.modified = True
             
         elif has_approved == False:
-            # User canceled
-            messages.append(HumanMessage(content="System Notification: User rejected current step. Stop plan."))
+            messages.append(HumanMessage(content="System Notification: User aborted current step. Stop execution."))
             request.session["active_plan"] = []
             request.session["current_step_index"] = 0
             request.session["active_elements"] = {}
@@ -192,7 +132,7 @@ def api_chat(request):
                 "reply": "Workflow canceled. Active plans have been cleared."
             })
 
-        # Get tools and run graph
+        # Run LangGraph Engine
         available_tools = async_to_sync(mcp_executor.run_with_session)(action_type="GET_TOOLS")
         graph = create_graph()
         initial_state = {
@@ -208,12 +148,12 @@ def api_chat(request):
             "current_step_index": session_step_idx
         }
         
-        # Inject known elements system context
+        # Inject known active modeling elements as system metadata context
         if scene_elements:
             initial_state["messages"] = [SystemMessage(
-                content=f"--- ACTIVE MODEL ELEMENTS IN SCENE ---\n"
+                content=f"--- ACTIVE MODEL ELEMENTS & GEOMETRIC ENTITIES IN SCENE ---\n"
                 f"{json.dumps(scene_elements, indent=2)}\n"
-                "Use these IDs as parameters when calling subsequent tools."
+                "Use these structural element IDs and transient face references exactly as parameters when constructing subsequent features."
             )] + list(initial_state["messages"])
 
         output_state = graph.invoke(initial_state)
@@ -221,12 +161,10 @@ def api_chat(request):
         proposed_action = output_state.get("next_action")
         final_reply = output_state.get("final_reply")
         
-        # 2. Extract plan if newly created
+        # Extract plan if newly created
         if final_reply and not session_plan:
-            # Clean raw matching lines from LLM response
             found_steps = re.findall(r'^\s*\d+\.\s*(.+)$', final_reply, re.MULTILINE)
             if found_steps:
-                # Strip markdown asterisks and bold tags
                 cleaned_steps = [re.sub(r'[*_#]', '', step).strip() for step in found_steps]
                 session_plan = cleaned_steps
                 request.session["active_plan"] = cleaned_steps
@@ -236,7 +174,7 @@ def api_chat(request):
                 
                 return JsonResponse({
                     "status": "requires_approval",
-                    "message": f"{final_reply}\n\n🤖 **Plan Initialized.** Do you approve initializing this modeling sequence?",
+                    "message": f"{final_reply}\n\n🤖 **Plan Initialized.** Do you approve initializing this sequence?",
                     "pendingAction": {
                         "action": "INITIALIZE_PLAN",
                         "name": "initialize_plan",
@@ -261,49 +199,3 @@ def api_chat(request):
     except Exception as e:
         print(f"[CRITICAL CHAT EXCEPTION]: {str(e)}")
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
-# =====================================================================
-# 📄 DIAGNOSTIC & TELEMETRY MONITORING CONTROLS
-# =====================================================================
-def view_agent_logs(request):
-    """Renders the logs along with a live sanity check of the MCP Server connection."""
-    mcp_status = "🔴 Disconnected / Error"
-    discovered_tools = []
-    
-    try:
-        # Fire a quick dynamic session handshake check to see if the subprocess boots
-        from .mcp_client import mcp_executor
-        discovered_tools = async_to_sync(mcp_executor.run_with_session)(action_type="GET_TOOLS")
-        if discovered_tools:
-            mcp_status = f"🟢 Connected ({len(discovered_tools)} tools discovered)"
-    except Exception as e:
-        mcp_status = f"🔴 Connection Failure: {str(e)}"
-
-    if not os.path.exists(LOG_FILE_PATH):
-        log_content = "Log file empty."
-    else:
-        with open(LOG_FILE_PATH, 'r', encoding='utf-8') as f:
-            log_content = f.read()
-
-    # Formulate a diagnostic info card summary array
-    tools_list_html = "".join([f"<li><code>{t['name']}</code>: {t['description']}</li>" for t in discovered_tools or []])
-
-    html_layout = f"""
-    <html>
-    <head><title>aiShape Agent Audit Dashboard</title></head>
-    <body style="background:#1e1e1e; color:#d4d4d4; font-family:monospace; padding:20px;">
-        <div style="background:#2d2d2d; padding:15px; margin-bottom:20px; border-radius:4px; border-left: 5px solid #007acc;">
-            <h3>🔌 MCP Server Live Link Status: <span style="font-weight:bold;">{mcp_status}</span></h3>
-            <ul>{tools_list_html}</ul>
-            <a href="/api/logs/clear/" style="color:#f44336; font-weight:bold; text-decoration:none;">⚠️ Delete Logs & Start Fresh</a>
-        </div>
-        <pre style="white-space:pre-wrap;">{log_content}</pre>
-    </body>
-    </html>
-    """
-    return HttpResponse(html_layout)
-
-@csrf_exempt
-def clear_agent_logs(request):
-    with open(LOG_FILE_PATH, 'w', encoding='utf-8') as f:
-        f.write("")
-    return HttpResponse("<html><body><script>alert('Logs cleared!'); window.location.href='/api/logs/';</script></body></html>")
