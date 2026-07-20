@@ -7,6 +7,47 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from .agent import create_graph
 from .mcp_client import mcp_executor
 
+
+
+def onshape_callback(request):
+    auth_code = request.GET.get('code')
+    if not auth_code:
+        return JsonResponse({'status': 'error', 'message': 'No authorization code detected.'}, status=400)
+    
+    client_id = os.environ.get('ONSHAPE_CLIENT_ID', '').strip()
+    client_secret = os.environ.get('ONSHAPE_CLIENT_SECRET', '').strip()
+    actual_redirect_uri = request.build_absolute_uri(request.path)
+
+    token_url = "https://oauth.onshape.com/oauth/token"
+    payload = {
+        'grant_type': 'authorization_code',
+        'code': auth_code,
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'redirect_uri': actual_redirect_uri,
+    }
+    
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+    }
+    
+    response = requests.post(token_url, data=payload, headers=headers)
+    if response.status_code == 200:
+        tokens = response.json()
+        return JsonResponse({
+            'status': 'success', 
+            'message': 'Authenticated with Onshape successfully!',
+            'access_token_preview': tokens.get('access_token')[:10] + "..."
+        })
+    else:
+        return JsonResponse({
+            'status': 'handshake_failed',
+            'onshape_error_payload': response.json()
+        }, status=response.status_code)
+
+
+
 @csrf_exempt
 def api_chat(request):
     if request.method != 'POST':
