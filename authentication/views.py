@@ -154,3 +154,32 @@ def api_chat(request):
     except Exception as e:
         print(f"[CRITICAL EXCEPTION]: {str(e)}")
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
+    
+
+
+
+
+
+def view_agent_logs(request):
+    if not os.path.exists(LOG_FILE_PATH):
+        return HttpResponse("<html><body><h3>Log file is currently empty or hasn't been created yet.</h3></body></html>")
+    with open(LOG_FILE_PATH, 'r', encoding='utf-8') as f:
+        log_content = f.read()
+    html_layout = f"""
+    <html>
+    <head><title>aiShape Agent Audit Dashboard</title></head>
+    <body style="background:#1e1e1e; color:#d4d4d4; font-family:monospace; padding:20px;">
+        <div style="background:#2d2d2d; padding:10px; margin-bottom:20px; border-radius:4px;">
+            <a href="/api/logs/clear/" style="color:#f44336; font-weight:bold; text-decoration:none;">⚠️ Delete Logs & Start Fresh</a>
+        </div>
+        <pre style="white-space:pre-wrap;">{log_content}</pre>
+    </body>
+    </html>
+    """
+    return HttpResponse(html_layout)
+
+@csrf_exempt
+def clear_agent_logs(request):
+    with open(LOG_FILE_PATH, 'w', encoding='utf-8') as f:
+        f.write("")
+    return HttpResponse("<html><body><script>alert('Logs cleared!'); window.location.href='/api/logs/';</script></body></html>")
