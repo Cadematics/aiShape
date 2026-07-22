@@ -19,6 +19,7 @@ class AgentState(TypedDict):
     approval_granted: Optional[bool]
     final_reply: Optional[str]
 
+
 def core_agent_node(state: AgentState):
     """Determines the next tool call or produces the final answer."""
     llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=OPENAI_HARDCODED_KEY)
@@ -34,8 +35,8 @@ def core_agent_node(state: AgentState):
         "--- WORKFLOW MANDATE ---\n"
         "1. For complex geometries (like wine glasses or enclosures), write a local helper Python script using 'Create' "
         "to calculate points, execute it with 'Bash', read the output JSON payload with 'Read', and send it to Onshape.\n"
-        "2. Do NOT output preliminary 'Plan Initialized' prompts asking for plan approval.\n"
-        "3. Output a tool proposal as a JSON block whenever a tool call is needed:\n"
+        "2. Do NOT output preliminary text like 'I will write a script now...' unless you also include the tool execution JSON block in the SAME response.\n"
+        "3. Every tool call MUST be outputted as a JSON block in markdown backticks:\n"
         "```json\n"
         "{\"action\": \"CALL_TOOL\", \"name\": \"tool_name\", \"arguments\": {...}}\n"
         "```\n\n"
@@ -49,16 +50,18 @@ def core_agent_node(state: AgentState):
     response = llm.invoke([system_msg] + list(state['messages']))
     content = response.content.strip()
     
-    match = re.search(r'```json\s*(\{.*?\})\s*```', content, re.DOTALL | re.IGNORECASE) or re.search(r'(\{.*\})', content, re.DOTALL)
+    # Robust Regex Extraction for Tool Calls
+    match = re.search(r'```json\s*(\{.*?\})\s*```', content, re.DOTALL | re.IGNORECASE) or re.search(r'(\{.*action.*?\})', content, re.DOTALL)
     if match:
         try:
             action_data = json.loads(match.group(1).strip())
             if action_data.get("action") == "CALL_TOOL" or "name" in action_data:
                 return {"next_action": action_data, "messages": [response], "final_reply": None}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[PARSER WARNING] Failed to parse tool call JSON: {e}")
             
     return {"final_reply": content, "messages": [response], "next_action": None}
+
 
 
 def should_continue(state: AgentState) -> Literal["continue", "exit"]:

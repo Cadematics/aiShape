@@ -127,7 +127,7 @@ def api_chat(request):
                         request.session["active_elements"] = scene_elements
                         request.session.modified = True
 
-            # Run LangGraph Agent Engine
+            # Run LangGraph Agent Engine and Stream
             available_tools = async_to_sync(mcp_executor.run_with_session)(action_type="GET_TOOLS")
             graph = create_graph()
             initial_state = {
@@ -146,20 +146,23 @@ def api_chat(request):
                     content=f"--- ACTIVE SCENE GEOMETRY IDs ---\n{json.dumps(scene_elements, indent=2)}"
                 )] + list(initial_state["messages"])
 
-            # 💥 Stream graph events live as they happen!
-            for event in graph.stream(initial_state, stream_mode="updates"):
-                for node_name, state_update in event.items():
-                    if node_name == "background_tools":
-                        action = state_update.get("next_action") or {}
-                        yield sse_format("step", {
-                            "title": f"Auto-executing background tool: {action.get('name', 'diagnostic')}",
-                            "status": "completed"
-                        })
-                    elif node_name == "agent":
-                        yield sse_format("status", {"message": "Agent analyzing spatial parameters..."})
+            final_state = initial_state
+            
+            # Stream graph updates live
+            for event in graph.stream(initial_state, stream_mode="values"):
+                final_state = event
+                next_act = event.get("next_action")
+                
+                if next_act:
+                    yield sse_format("step", {
+                        "title": f"Executing action: {next_act.get('name', 'tool')}",
+                        "status": "running"
+                    })
+                else:
+                    yield sse_format("status", {"message": "Agent evaluating next architectural step..."})
 
-            output_state = graph.invoke(initial_state)
-            proposed_action = output_state.get("next_action")
+            proposed_action = final_state.get("next_action")
+            final_reply = final_state.get("final_reply")
             
             if proposed_action:
                 yield sse_format("approval_required", {
@@ -170,7 +173,7 @@ def api_chat(request):
             else:
                 yield sse_format("done", {
                     "status": "success",
-                    "reply": output_state.get("final_reply", "Task completed.")
+                    "reply": final_reply or "Task completed."
                 })
 
         return StreamingHttpResponse(event_stream_generator(), content_type="text/event-stream")
