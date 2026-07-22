@@ -7,6 +7,22 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from .agent import create_graph
 from .mcp_client import mcp_executor
 
+# 💥 Ensure StreamingHttpResponse is imported at the top of authentication/views.py:
+from django.http import StreamingHttpResponse, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+import json
+import re
+from asgiref.sync import async_to_sync
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from .agent import create_graph
+from .mcp_client import mcp_executor
+import os
+import requests
+
+
+
+
+
 
 
 def onshape_callback(request):
