@@ -150,28 +150,34 @@ def api_chat(request):
             
             # Stream graph updates live
             final_state = initial_state
+            print("\n🚀 [STARTING LANGGRAPH STREAMING LOOP]")
+            
             for event in graph.stream(initial_state, stream_mode="values"):
                 final_state = event
                 next_act = event.get("next_action")
                 
                 if next_act:
+                    print(f"📡 [SSE EVENT]: Step running -> {next_act.get('name')}")
                     yield sse_format("step", {
                         "title": f"Executing tool: {next_act.get('name', 'action')}",
                         "status": "running"
                     })
                 else:
+                    print("📡 [SSE EVENT]: Status evaluating...")
                     yield sse_format("status", {"message": "Agent evaluating spatial requirements..."})
 
             proposed_action = final_state.get("next_action")
             final_reply = final_state.get("final_reply")
             
             if proposed_action:
+                print(f"🎯 [FINAL GRAPH OUTPUT]: Proposal required for -> {proposed_action['name']}")
                 yield sse_format("approval_required", {
                     "status": "requires_approval",
                     "message": f"🤖 **Proposal: {proposed_action['name']}**\nI want to run `{proposed_action['name']}` with parameters: {json.dumps(proposed_action['arguments'])}",
                     "pendingAction": proposed_action
                 })
             else:
+                print(f"💬 [FINAL GRAPH OUTPUT]: Plain text response -> {final_reply[:100]}...")
                 yield sse_format("done", {
                     "status": "success",
                     "reply": final_reply or "Task processed."
