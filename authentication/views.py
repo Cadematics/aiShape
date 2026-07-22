@@ -149,17 +149,18 @@ def api_chat(request):
             final_state = initial_state
             
             # Stream graph updates live
+            final_state = initial_state
             for event in graph.stream(initial_state, stream_mode="values"):
                 final_state = event
                 next_act = event.get("next_action")
                 
                 if next_act:
                     yield sse_format("step", {
-                        "title": f"Executing action: {next_act.get('name', 'tool')}",
+                        "title": f"Executing tool: {next_act.get('name', 'action')}",
                         "status": "running"
                     })
                 else:
-                    yield sse_format("status", {"message": "Agent evaluating next architectural step..."})
+                    yield sse_format("status", {"message": "Agent evaluating spatial requirements..."})
 
             proposed_action = final_state.get("next_action")
             final_reply = final_state.get("final_reply")
@@ -167,13 +168,13 @@ def api_chat(request):
             if proposed_action:
                 yield sse_format("approval_required", {
                     "status": "requires_approval",
-                    "message": f"🤖 **Proposal: {proposed_action['name']}**\nI want to run `{proposed_action['name']}` with options: {json.dumps(proposed_action['arguments'])}",
+                    "message": f"🤖 **Proposal: {proposed_action['name']}**\nI want to run `{proposed_action['name']}` with parameters: {json.dumps(proposed_action['arguments'])}",
                     "pendingAction": proposed_action
                 })
             else:
                 yield sse_format("done", {
                     "status": "success",
-                    "reply": final_reply or "Task completed."
+                    "reply": final_reply or "Task processed."
                 })
 
         return StreamingHttpResponse(event_stream_generator(), content_type="text/event-stream")
