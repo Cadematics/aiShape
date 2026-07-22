@@ -57,7 +57,6 @@ def api_chat(request):
         data = json.loads(request.body)
         user_prompt = data.get('prompt', '')
         cad_context = data.get('context', {})
-        
         has_approved = data.get('approved', None)
         pending_action = data.get('pendingAction', None)
         chat_history_raw = data.get('history', [])
@@ -65,96 +64,104 @@ def api_chat(request):
         doc_id = cad_context.get('documentId')
         work_id = cad_context.get('workspaceId')
         elem_id = cad_context.get('elementId')
-
         scene_elements = request.session.get("active_elements", {})
 
-        messages = []
-        for msg in chat_history_raw:
-            if msg.get('isActionPrompt'):
-                continue
-            if msg.get('sender') == 'user':
-                messages.append(HumanMessage(content=msg['text']))
-            else:
-                messages.append(AIMessage(content=msg['text']))
-                
-        if user_prompt and user_prompt not in ["Approved", "Rejected"]:
-            messages.append(HumanMessage(content=user_prompt))
-
-        # Handle explicit tool approval
-        if has_approved is True and pending_action:
-            print(f"[AGENT CORE] Executing approved write tool: {pending_action['name']}")
-            tool_output_raw = async_to_sync(mcp_executor.run_with_session)(
-                action_type="CALL_TOOL",
-                tool_name=pending_action['name'],
-                arguments=pending_action['arguments']
-            )
+        def event_stream_generator():
+            """Generates Server-Sent Events (SSE) in real-time as LangGraph steps execute."""
             
-            clean_output_list = []
-            for block in (tool_output_raw or []):
-                if hasattr(block, 'text'):
-                    clean_output_list.append(block.text)
+            # Helper to format SSE frames
+            def sse_format(event_type: str, payload: dict) -> str:
+                return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
+
+            yield sse_format("status", {"message": "Initializing autonomous agent loop..."})
+
+            messages = []
+            for msg in chat_history_raw:
+                if msg.get('isActionPrompt'):
+                    continue
+                if msg.get('sender') == 'user':
+                    messages.append(HumanMessage(content=msg['text']))
                 else:
-                    clean_output_list.append(str(block))
+                    messages.append(AIMessage(content=msg['text']))
+                    
+            if user_prompt and user_prompt not in ["Approved", "Rejected"]:
+                messages.append(HumanMessage(content=user_prompt))
+
+            # Handle user approvals for CAD write actions
+            if has_approved is True and pending_action:
+                yield sse_format("step", {"title": f"Executing CAD action: {pending_action['name']}", "status": "running"})
+                
+                tool_output_raw = async_to_sync(mcp_executor.run_with_session)(
+                    action_type="CALL_TOOL",
+                    tool_name=pending_action['name'],
+                    arguments=pending_action['arguments']
+                )
+                
+                clean_output_list = [
+                    block.text if hasattr(block, 'text') else str(block) 
+                    for block in (tool_output_raw or [])
+                ]
+                final_tool_string = "\n".join(clean_output_list)
+                messages.append(HumanMessage(content=f"System Notification: Tool '{pending_action['name']}' returned: {final_tool_string}"))
+                
+                if "featureId" in final_tool_string or "id" in final_tool_string:
+                    match = re.search(r'"(?:featureId|id)"\s*:\s*"([^"]+)"', final_tool_string)
+                    if match:
+                        scene_elements[pending_action['name']] = match.group(1)
+                        request.session["active_elements"] = scene_elements
+                        request.session.modified = True
+
+            # Run LangGraph Agent Engine
+            available_tools = async_to_sync(mcp_executor.run_with_session)(action_type="GET_TOOLS")
+            graph = create_graph()
+            initial_state = {
+                "messages": messages,
+                "doc_id": doc_id or "",
+                "work_id": work_id or "",
+                "elem_id": elem_id or "",
+                "available_tools": available_tools,
+                "next_action": None,
+                "approval_granted": has_approved,
+                "final_reply": None
+            }
+
+            if scene_elements:
+                initial_state["messages"] = [SystemMessage(
+                    content=f"--- ACTIVE SCENE GEOMETRY IDs ---\n{json.dumps(scene_elements, indent=2)}"
+                )] + list(initial_state["messages"])
+
+            # 💥 Stream graph events live as they happen!
+            for event in graph.stream(initial_state, stream_mode="updates"):
+                for node_name, state_update in event.items():
+                    if node_name == "background_tools":
+                        action = state_update.get("next_action") or {}
+                        yield sse_format("step", {
+                            "title": f"Auto-executing background tool: {action.get('name', 'diagnostic')}",
+                            "status": "completed"
+                        })
+                    elif node_name == "agent":
+                        yield sse_format("status", {"message": "Agent analyzing spatial parameters..."})
+
+            output_state = graph.invoke(initial_state)
+            proposed_action = output_state.get("next_action")
             
-            final_tool_string = "\n".join(clean_output_list)
-            messages.append(HumanMessage(content=f"System Notification: Tool '{pending_action['name']}' returned: {final_tool_string}"))
-            
-            # Store returned feature IDs
-            if "featureId" in final_tool_string or "id" in final_tool_string:
-                match = re.search(r'"(?:featureId|id)"\s*:\s*"([^"]+)"', final_tool_string)
-                if match:
-                    scene_elements[pending_action['name']] = match.group(1)
-                    request.session["active_elements"] = scene_elements
+            if proposed_action:
+                yield sse_format("approval_required", {
+                    "status": "requires_approval",
+                    "message": f"🤖 **Proposal: {proposed_action['name']}**\nI want to run `{proposed_action['name']}` with options: {json.dumps(proposed_action['arguments'])}",
+                    "pendingAction": proposed_action
+                })
+            else:
+                yield sse_format("done", {
+                    "status": "success",
+                    "reply": output_state.get("final_reply", "Task completed.")
+                })
 
-            has_approved = None
-            pending_action = None
-            request.session.modified = True
-
-        elif has_approved == False:
-            request.session["active_elements"] = {}
-            request.session.modified = True
-            return JsonResponse({"status": "success", "reply": "Operation rejected and workflow stopped."})
-
-        # Run LangGraph Engine
-        available_tools = async_to_sync(mcp_executor.run_with_session)(action_type="GET_TOOLS")
-        graph = create_graph()
-        initial_state = {
-            "messages": messages,
-            "doc_id": doc_id or "",
-            "work_id": work_id or "",
-            "elem_id": elem_id or "",
-            "available_tools": available_tools,
-            "next_action": pending_action,
-            "approval_granted": has_approved,
-            "final_reply": None
-        }
-
-        if scene_elements:
-            initial_state["messages"] = [SystemMessage(
-                content=f"--- ACTIVE SCENE GEOMETRY IDs ---\n{json.dumps(scene_elements, indent=2)}"
-            )] + list(initial_state["messages"])
-
-        output_state = graph.invoke(initial_state)
-        
-        proposed_action = output_state.get("next_action")
-        
-        if proposed_action:
-            action = proposed_action
-            return JsonResponse({
-                "status": "requires_approval",
-                "message": f"🤖 **Proposal: {action['name']}**\nI want to run `{action['name']}` with parameters: {json.dumps(action['arguments'])}",
-                "pendingAction": action
-            })
-            
-        return JsonResponse({
-            "status": "success",
-            "reply": output_state.get("final_reply", "Task completed successfully.")
-        })
+        return StreamingHttpResponse(event_stream_generator(), content_type="text/event-stream")
         
     except Exception as e:
         print(f"[CRITICAL EXCEPTION]: {str(e)}")
-        return JsonResponse({"status": "error", "message": str(e)}, status=500)
-    
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)    
 
 
 
