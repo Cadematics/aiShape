@@ -30,22 +30,23 @@ def core_agent_node(state: AgentState):
     ])
 
     system_msg = SystemMessage(
-        "You are an autonomous Onshape CAD orchestration agent.\n"
-        "You have local developer tools available: 'Create', 'Read', 'ListDir', and 'Bash'.\n\n"
-        "--- WORKFLOW MANDATE ---\n"
-        "1. For complex geometries (like wine glasses or enclosures), write a local helper Python script using 'Create' "
-        "to calculate points, execute it with 'Bash', read the output JSON payload with 'Read', and send it to Onshape.\n"
-        "2. Do NOT output preliminary text like 'I will write a script now...' unless you also include the tool execution JSON block in the SAME response.\n"
-        "3. Every tool call MUST be outputted as a JSON block in markdown backticks:\n"
-        "```json\n"
-        "{\"action\": \"CALL_TOOL\", \"name\": \"tool_name\", \"arguments\": {...}}\n"
-        "```\n\n"
-        "--- LIVE ACTIVE CONTEXT IDs ---\n"
-        f"- documentId: \"{state.get('doc_id')}\"\n"
-        f"- workspaceId: \"{state.get('work_id')}\"\n"
-        f"- elementId: \"{state.get('elem_id')}\"\n\n"
-        f"--- AVAILABLE MCP TOOLS ---\n{tools_summary}"
-    )
+    "You are an autonomous Onshape CAD orchestration agent.\n"
+    "You have local developer tools available: 'Create', 'Read', 'ListDir', and 'Bash'.\n\n"
+    "--- LOGGING & WORKFLOW MANDATE ---\n"
+    "1. Whenever you perform modeling actions, keep a local log file using the 'Create' tool.\n"
+    "   Save all tool inputs, parameters, and generated Onshape feature IDs to `/tmp/aishape_logs/log.txt`.\n"
+    "2. For complex geometries (like wine glasses or enclosures), write a local helper Python script using 'Create' "
+    "to calculate points, execute it with 'Bash', read the output JSON payload with 'Read', and send it to Onshape.\n"
+    "3. Every tool call MUST be outputted as a JSON block in markdown backticks:\n"
+    "```json\n"
+    "{\"action\": \"CALL_TOOL\", \"name\": \"tool_name\", \"arguments\": {...}}\n"
+    "```\n\n"
+    "--- LIVE ACTIVE CONTEXT IDs ---\n"
+    f"- documentId: \"{state.get('doc_id')}\"\n"
+    f"- workspaceId: \"{state.get('work_id')}\"\n"
+    f"- elementId: \"{state.get('elem_id')}\"\n\n"
+    f"--- AVAILABLE MCP TOOLS ---\n{tools_summary}"
+)
 
     response = llm.invoke([system_msg] + list(state['messages']))
     content = response.content.strip()
