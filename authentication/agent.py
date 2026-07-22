@@ -24,38 +24,41 @@ def core_agent_node(state: AgentState):
     llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=OPENAI_HARDCODED_KEY)
     
     tools_summary = "\n".join([
-        f"- Name: {t.get('name')}, Description: {t.get('description')}"
+        f"- Name: {t.get('name')}, Description: {t.get('description')}, Input Schema: {t.get('inputSchema', {})}"
         for t in state['available_tools']
     ])
 
     system_msg = SystemMessage(
         "You are an autonomous Onshape CAD orchestration agent.\n"
-        "You have local developer tools available: 'Create', 'Read', 'ListDir', and 'Bash'.\n\n"
-        "--- STRICT ACTION PROTOCOL ---\n"
-        "1. Do NOT output conversational status updates (e.g., 'I will proceed now', 'Let us create a sketch').\n"
-        "2. If an action or tool call is needed, you MUST output ONLY the JSON tool block. No introductory text.\n"
-        "3. Every tool execution proposal MUST be formatted exactly as a markdown JSON block:\n"
+        "You have access to MCP CAD tools and local developer tools ('Create', 'Read', 'ListDir', 'Bash').\n\n"
+        "--- ABSOLUTE FORMAT RULE ---\n"
+        "Do NOT write conversational chatter like 'I will create a sketch now' or 'Let us start by...'.\n"
+        "If any action or modeling step is required, your response MUST be ONLY a single Markdown JSON code block containing the tool call.\n"
+        "Example:\n"
         "```json\n"
-        "{\"action\": \"CALL_TOOL\", \"name\": \"tool_name\", \"arguments\": {...}}\n"
-        "```\n"
-        "4. Keep a local session log of every action taken using 'Create' at `/tmp/aishape_logs/log.txt`.\n\n"
+        "{\n"
+        '  "action": "CALL_TOOL",\n'
+        '  "name": "target_tool_name",\n'
+        '  "arguments": { ... }\n'
+        "}\n"
+        "```\n\n"
         "--- LIVE ACTIVE CONTEXT IDs ---\n"
         f"- documentId: \"{state.get('doc_id')}\"\n"
         f"- workspaceId: \"{state.get('work_id')}\"\n"
         f"- elementId: \"{state.get('elem_id')}\"\n\n"
-        f"--- AVAILABLE MCP TOOLS ---\n{tools_summary}"
+        f"--- AVAILABLE TOOLS ---\n{tools_summary}"
     )
 
     response = llm.invoke([system_msg] + list(state['messages']))
     content = response.content.strip()
-    
-    # 🔍 DEBUG PRINT 1: Print raw LLM string to Render logs
+
     print("\n==================== [RAW LLM OUTPUT] ====================")
     print(content)
     print("==========================================================\n")
 
-    # Match JSON tool call blocks cleanly
+    # Extract JSON tool call block
     match = re.search(r'```json\s*(\{.*?\})\s*```', content, re.DOTALL | re.IGNORECASE) or re.search(r'(\{.*?"action"\s*:\s*"CALL_TOOL".*?\})', content, re.DOTALL)
+    
     if match:
         try:
             action_data = json.loads(match.group(1).strip())
@@ -64,8 +67,9 @@ def core_agent_node(state: AgentState):
                 return {"next_action": action_data, "messages": [response], "final_reply": None}
         except Exception as e:
             print(f"❌ [PARSER EXCEPTION]: {e}")
-            
-    print("⚠️ [PARSER WARNING]: No tool call block matched! Returning text reply.")
+
+    # Fallback: if the LLM output conversational text without JSON, check if it tried to outline a step and force a tool retry
+    print("⚠️ [PARSER WARNING]: Model output prose without JSON tool call.")
     return {"final_reply": content, "messages": [response], "next_action": None}
 
 
@@ -80,7 +84,8 @@ def should_continue(state: AgentState) -> Literal["continue", "exit"]:
         "Create", "Read", "ListDir", "Bash",
         "get_features", "get_variables", "get_parts", 
         "eval_featurescript", "get_elements", "get_document_summary",
-        "onshape_read_resource", "onshape_api_search", "onshape_api_explain"
+        "onshape_read_resource", "onshape_api_search", "onshape_api_explain",
+        "onshape_auth_status", "onshape_mcp_get_started", "onshape_list_resources"
     ]
     
     tool_name = action.get("name")
@@ -109,10 +114,10 @@ def execute_background_tool(state: AgentState):
     ]
     final_tool_string = "\n".join(clean_output_list)
     
-    print(f"📥 [TOOL OUTPUT OUTPUT]:\n{final_tool_string[:300]}...\n")
+    print(f"📥 [TOOL OUTPUT]:\n{final_tool_string[:300]}...\n")
     
     return {
-        "messages": [AIMessage(content=f"System Notification: Tool '{action['name']}' returned output: {final_tool_string}")],
+        "messages": [AIMessage(content=f"System Notification: Tool '{action['name']}' returned: {final_tool_string}")],
         "next_action": None
     }
 
